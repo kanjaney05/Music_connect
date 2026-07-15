@@ -1,6 +1,37 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class AuthUserBase(BaseModel):
+    email: str = Field(min_length=5, max_length=180)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AuthUserPublic(BaseModel):
+    email: str = Field(min_length=5, max_length=180)
+    role: str = Field(min_length=4, max_length=40)
+
+
+class AuthRegisterRequest(AuthUserBase):
+    role: str = Field(min_length=4, max_length=40)
+
+
+class AuthLoginRequest(AuthUserBase):
+    pass
+
+
+class AuthUserRead(AuthUserPublic):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str
+    role: str
+
+
+class AuthTokenResponse(AuthUserRead):
+    access_token: str
+    token_type: str = "bearer"
+
+
 class ServiceProfileBase(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     instrument: str = Field(min_length=2, max_length=80)

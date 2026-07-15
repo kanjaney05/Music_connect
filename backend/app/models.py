@@ -23,6 +23,16 @@ class ServiceProfile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    email: Mapped[str] = mapped_column(String(180), unique=True, index=True, nullable=False)
+    role: Mapped[str] = mapped_column(String(40), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class CommunityEvent(Base):
     __tablename__ = "community_events"
 

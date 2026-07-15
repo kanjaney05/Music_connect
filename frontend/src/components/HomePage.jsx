@@ -1,4 +1,4 @@
-export default function HomePage({ dashboard, isLoading, onEnroll, onRequest }) {
+export default function HomePage({ dashboard, isLoading, onEnroll, onRequest, currentUser, canEnroll, canRequest }) {
   return (
     <section className="hero card section-anchor">
       <div className="hero-copy">
@@ -9,13 +9,18 @@ export default function HomePage({ dashboard, isLoading, onEnroll, onRequest }) 
           programs, and celebrations while giving performers a place to enroll and share their details.
         </p>
         <div className="hero-actions">
-          <button className="button primary" type="button" onClick={onEnroll}>
-            Enroll a musician
-          </button>
-          <button className="button secondary" type="button" onClick={onRequest}>
-            Request a performance
-          </button>
+          {canEnroll ? (
+            <button className="button primary" type="button" onClick={onEnroll}>
+              Enroll a musician
+            </button>
+          ) : null}
+          {canRequest ? (
+            <button className="button secondary" type="button" onClick={onRequest}>
+              Request a performance
+            </button>
+          ) : null}
         </div>
+        {currentUser ? <p className="role-chip">Signed in as {currentUser.email} · {currentUser.role}</p> : null}
       </div>
 
       <div className="hero-panel">

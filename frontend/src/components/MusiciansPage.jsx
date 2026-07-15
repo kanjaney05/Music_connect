@@ -1,4 +1,4 @@
-export default function MusiciansPage({ musicians, onEnroll }) {
+export default function MusiciansPage({ musicians, onEnroll, canEnroll, currentUser }) {
   return (
     <section className="content-grid section-anchor musicians-section route-page">
       <article className="card list-card musicians-list-card full-span-card">
@@ -7,10 +7,14 @@ export default function MusiciansPage({ musicians, onEnroll }) {
             <p className="eyebrow">Musicians</p>
             <h2>Browse local performers</h2>
           </div>
-          <button className="button secondary slim-button" type="button" onClick={onEnroll}>
-            Enroll a new musician
-          </button>
+          {canEnroll ? (
+            <button className="button secondary slim-button" type="button" onClick={onEnroll}>
+              Enroll a new musician
+            </button>
+          ) : null}
         </div>
+
+        {currentUser ? <p className="role-chip role-chip-inline">Visible to {currentUser.role}</p> : null}
 
         <div className="card-list musician-grid">
           {musicians.map((musician) => (
