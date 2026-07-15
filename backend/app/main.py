@@ -7,6 +7,8 @@ import jwt
 from passlib.context import CryptContext
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
@@ -25,6 +27,7 @@ from .schemas import (
     PerformanceRequestRead,
     ServiceProfileCreate,
     ServiceProfileRead,
+    ServiceProfileUpsert,
 )
 
 app = FastAPI(title="Music Connect API", version="1.0.0")
@@ -35,6 +38,7 @@ ALLOWED_ROLES = {"ADMIN", "SERV-PROVIDER", "CONSUMER"}
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_MINUTES = 24 * 60
 PASSWORD_CONTEXT = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
 
 def load_environment_file() -> None:
@@ -54,9 +58,17 @@ def load_environment_file() -> None:
 load_environment_file()
 JWT_SECRET = os.environ.get("MUSIC_CONNECT_JWT_SECRET", "music-connect-dev-secret")
 
+
+def get_allowed_origins() -> list[str]:
+    origins = os.environ.get("MUSIC_CONNECT_CORS_ORIGINS")
+    if origins:
+        return [origin.strip() for origin in origins.split(",") if origin.strip()]
+
+    return ["http://localhost:5173"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -249,6 +261,10 @@ def get_user_by_email(session: Session, email: str) -> Optional[User]:
     return session.scalar(select(User).where(User.email == normalize_email(email)))
 
 
+def get_service_profile_by_email(session: Session, email: str) -> Optional[ServiceProfile]:
+    return session.scalar(select(ServiceProfile).where(ServiceProfile.email == normalize_email(email)))
+
+
 def get_current_user(
     db: Session = Depends(get_db),
     authorization: Optional[str] = Header(default=None, alias="Authorization"),
@@ -372,7 +388,7 @@ def dashboard(
 @app.get("/api/musicians", response_model=list[ServiceProfileRead])
 def list_musicians(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles("CONSUMER")),
 ) -> list[ServiceProfile]:
     statement = select(ServiceProfile).order_by(ServiceProfile.created_at.desc())
     return list(db.scalars(statement))
@@ -381,7 +397,7 @@ def list_musicians(
 @app.get("/api/services", response_model=list[ServiceProfileRead])
 def list_services(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_roles("CONSUMER")),
 ) -> list[ServiceProfile]:
     statement = select(ServiceProfile).order_by(ServiceProfile.created_at.desc())
     return list(db.scalars(statement))
@@ -413,6 +429,47 @@ def create_service(
     return musician
 
 
+@app.get("/api/service-profile/me", response_model=ServiceProfileRead)
+def read_own_service_profile(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER")),
+) -> ServiceProfile:
+    profile = get_service_profile_by_email(db, user.email)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Service profile not found")
+
+    return profile
+
+
+@app.put("/api/service-profile/me", response_model=ServiceProfileRead)
+def upsert_own_service_profile(
+    payload: ServiceProfileUpsert,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER")),
+) -> ServiceProfile:
+    profile = get_service_profile_by_email(db, user.email)
+    data = payload.model_dump()
+
+    if profile is None:
+        profile = ServiceProfile(email=normalize_email(user.email), contact=f"{data['phone']} | {user.email}")
+        db.add(profile)
+
+    profile.full_name = data["full_name"]
+    profile.instrument = data["instrument"]
+    profile.city = data["city"]
+    profile.state = data["state"]
+    profile.phone = data["phone"]
+    profile.email = normalize_email(user.email)
+    profile.contact = f"{data['phone']} | {user.email}"
+    profile.bio = data.get("bio") or "Community musician available for local events."
+    profile.rate = data.get("rate") or "Available upon request"
+    profile.available_weekends = data.get("available_weekends", True)
+
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
 def build_musician(payload: ServiceProfileCreate) -> ServiceProfile:
     data = payload.model_dump()
     return ServiceProfile(
@@ -434,6 +491,18 @@ def list_events(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[CommunityEvent]:
+    statement = select(CommunityEvent).order_by(CommunityEvent.created_at.desc())
+    return list(db.scalars(statement))
+
+
+@app.get("/api/public/service-providers", response_model=list[ServiceProfileRead])
+def public_service_providers(db: Session = Depends(get_db)) -> list[ServiceProfile]:
+    statement = select(ServiceProfile).order_by(ServiceProfile.created_at.desc())
+    return list(db.scalars(statement))
+
+
+@app.get("/api/public/event-requests", response_model=list[CommunityEventRead])
+def public_event_requests(db: Session = Depends(get_db)) -> list[CommunityEvent]:
     statement = select(CommunityEvent).order_by(CommunityEvent.created_at.desc())
     return list(db.scalars(statement))
 
@@ -486,6 +555,10 @@ def get_service(
     service = db.get(ServiceProfile, service_id)
     if service is None:
         raise HTTPException(status_code=404, detail="Service profile not found")
+
+    if user.role == "SERV-PROVIDER" and service.email != normalize_email(user.email):
+        raise HTTPException(status_code=403, detail="You can only view your own service profile")
+
     return service
 
 
@@ -499,3 +572,25 @@ def get_event(
     if event is None:
         raise HTTPException(status_code=404, detail="Community event not found")
     return event
+
+
+if FRONTEND_DIST_DIR.exists():
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_frontend(full_path: str):
+    if full_path.startswith("api/"):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    requested_file = FRONTEND_DIST_DIR / full_path
+    if requested_file.is_file():
+        return FileResponse(requested_file)
+
+    index_file = FRONTEND_DIST_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Frontend build not found")

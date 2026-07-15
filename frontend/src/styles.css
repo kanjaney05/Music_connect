@@ -140,6 +140,22 @@ textarea {
   flex-wrap: wrap;
 }
 
+.landing-header-inner {
+  align-items: center;
+}
+
+.landing-header-nav {
+  justify-content: flex-end;
+}
+
+.header-auth-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
 .nav-link {
   border-radius: 999px;
   padding: 0.65rem 0.95rem;
@@ -215,6 +231,34 @@ textarea {
   margin: 0;
   line-height: 1.05;
   letter-spacing: -0.04em;
+}
+
+.landing-stack {
+  display: grid;
+  gap: 1.2rem;
+}
+
+.landing-hero {
+  margin-bottom: 0;
+}
+
+.landing-section-card {
+  padding: 1.4rem;
+}
+
+.public-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.public-empty-state {
+  min-height: 130px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+}
+
+.landing-auth-section {
+  padding-top: 0.2rem;
 }
 
 .hero-copy h1 {
@@ -492,6 +536,33 @@ textarea {
 
 .auth-message {
   margin-top: 1rem;
+}
+
+.profile-editor-card {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.profile-helper {
+  margin-top: 0.75rem;
+}
+
+.profile-helper strong {
+  color: var(--accent);
+}
+
+.profile-email-readonly {
+  background: rgba(0, 106, 122, 0.06);
+  color: var(--muted);
+}
+
+.profile-checkbox-row {
+  min-height: 100%;
+  align-content: center;
+}
+
+.profile-checkbox-row input {
+  margin-top: 0.15rem;
 }
 
 .auth-loading {

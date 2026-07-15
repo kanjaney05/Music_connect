@@ -48,6 +48,17 @@ class ServiceProfileCreate(ServiceProfileBase):
     pass
 
 
+class ServiceProfileUpsert(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    instrument: str = Field(min_length=2, max_length=80)
+    city: str = Field(min_length=2, max_length=120)
+    state: str = Field(min_length=2, max_length=80)
+    phone: str = Field(min_length=7, max_length=40)
+    bio: str = Field(default="Community musician available for local events.", max_length=1000)
+    rate: str = Field(default="Available upon request", max_length=80)
+    available_weekends: bool = True
+
+
 class ServiceProfileRead(ServiceProfileBase):
     model_config = ConfigDict(from_attributes=True)
 
