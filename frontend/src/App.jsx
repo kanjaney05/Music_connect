@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { BrowserRouter, NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 
 import { AuthPage, EnrollMusicianPage, HomePage, ManageServiceProfilePage, MusiciansPage, RequestPerformancePage } from './components'
 
@@ -32,7 +32,21 @@ const emptyServiceProfileForm = {
   phone: '',
   bio: 'Community musician available for local events.',
   rate: 'Available upon request',
+  preferred_event_type: 'Any event',
+  preferred_contact_method: 'email',
   available_weekends: true,
+  travel_buffer_minutes: 120,
+}
+
+const providerEventTypes = ['Any event', 'Community celebration', 'Birthday', 'Wedding', 'Fundraiser', 'School concert']
+
+const emptyAvailabilityCalendar = {
+  provider_id: null,
+  travel_buffer_minutes: 120,
+  timezone_label: 'Local time',
+  from_date: '',
+  to_date: '',
+  days: [],
 }
 
 const eventTypes = ['Community celebration', 'Birthday', 'Wedding', 'Fundraiser', 'School concert', 'Other event']
@@ -47,7 +61,7 @@ function getDefaultRoute(role) {
   }
 
   if (role === 'CONSUMER') {
-    return '/request-performance'
+    return '/'
   }
 
   return '/'
@@ -106,6 +120,7 @@ function AppShell() {
   const [authForm, setAuthForm] = useState({
     email: '',
     password: '',
+    confirmPassword: '',
     role: 'CONSUMER',
   })
   const [dashboard, setDashboard] = useState(null)
@@ -113,18 +128,25 @@ function AppShell() {
   const [performanceRequests, setPerformanceRequests] = useState([])
   const [serviceProfile, setServiceProfile] = useState(null)
   const [serviceProfileForm, setServiceProfileForm] = useState(emptyServiceProfileForm)
+  const [providerAvailabilityCalendar, setProviderAvailabilityCalendar] = useState(emptyAvailabilityCalendar)
+  const [customerAvailabilityCalendar, setCustomerAvailabilityCalendar] = useState(emptyAvailabilityCalendar)
   const [publicServiceProviders, setPublicServiceProviders] = useState([])
-  const [publicEventRequests, setPublicEventRequests] = useState([])
   const [publicLoading, setPublicLoading] = useState(true)
   const [musicianForm, setMusicianForm] = useState(emptyMusicianForm)
   const [requestForm, setRequestForm] = useState(emptyRequestForm)
   const [message, setMessage] = useState('')
   const [authMessage, setAuthMessage] = useState('')
   const [profileMessage, setProfileMessage] = useState('')
+  const [availabilityMessage, setAvailabilityMessage] = useState('')
+  const [postAuthRedirect, setPostAuthRedirect] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isSavingProfile, setIsSavingProfile] = useState(false)
+  const [isSavingAvailability, setIsSavingAvailability] = useState(false)
+  const [isLoadingAvailability, setIsLoadingAvailability] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(true)
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
   const navigate = useNavigate()
+  const location = useLocation()
 
   function getAuthHeaders() {
     return accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
@@ -139,22 +161,29 @@ function AppShell() {
     setPerformanceRequests([])
     setServiceProfile(null)
     setServiceProfileForm(emptyServiceProfileForm)
+    setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+    setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
     setPublicServiceProviders([])
-    setPublicEventRequests([])
     setMusicianForm(emptyMusicianForm)
     setRequestForm(emptyRequestForm)
     setMessage('')
     setAuthMessage(nextMessage)
     setProfileMessage('')
+    setAvailabilityMessage('')
+    setPostAuthRedirect('')
     setIsLoading(false)
     setPublicLoading(true)
     setIsSavingProfile(false)
+    setIsSavingAvailability(false)
+    setIsLoadingAvailability(false)
+    setIsAuthModalOpen(false)
   }
 
   function resetAuthForm(nextMode = authMode) {
     setAuthForm((current) => ({
       ...current,
       password: '',
+      confirmPassword: '',
       role: nextMode === 'register' ? current.role : 'CONSUMER',
     }))
   }
@@ -163,6 +192,18 @@ function AppShell() {
     setAuthMode(nextMode)
     resetAuthForm(nextMode)
     setAuthMessage('')
+  }
+
+  function openAuthModal(nextMode, redirectTo = '') {
+    if (redirectTo) {
+      setPostAuthRedirect(redirectTo)
+    }
+    handleAuthModeChange(nextMode)
+    setIsAuthModalOpen(true)
+  }
+
+  function closeAuthModal() {
+    setIsAuthModalOpen(false)
   }
 
   useEffect(() => {
@@ -206,7 +247,14 @@ function AppShell() {
         })
 
         if (!response.ok) {
-          throw new Error('Session expired')
+          if (!ignore) {
+            setCurrentUser(storedUser.user)
+            setAccessToken(storedUser.accessToken)
+            setAuthMode('login')
+            setAuthForm({ email: storedUser.user.email, password: '', confirmPassword: '', role: storedUser.user.role })
+            setAuthMessage('Session restored locally. Refreshing the server connection in the background.')
+          }
+          return
         }
 
         const user = await response.json()
@@ -214,15 +262,16 @@ function AppShell() {
           setCurrentUser(user)
           setAccessToken(storedUser.accessToken)
           setAuthMode('login')
-          setAuthForm({ email: user.email, password: '', role: user.role })
+          setAuthForm({ email: user.email, password: '', confirmPassword: '', role: user.role })
           setAuthMessage('')
         }
       } catch {
-        localStorage.removeItem(AUTH_STORAGE_KEY)
         if (!ignore) {
-          setCurrentUser(null)
-          setAccessToken('')
-          setAuthMessage('Your session expired. Sign in again with your email address.')
+          setCurrentUser(storedUser.user)
+          setAccessToken(storedUser.accessToken)
+          setAuthMode('login')
+          setAuthForm({ email: storedUser.user.email, password: '', confirmPassword: '', role: storedUser.user.role })
+          setAuthMessage('Session restored locally. Refreshing the server connection in the background.')
         }
       } finally {
         if (!ignore) {
@@ -244,10 +293,13 @@ function AppShell() {
         const requests = [fetch('/api/dashboard', { headers: getAuthHeaders() })]
 
         if (isServiceProviderRole) {
-          requests.push(fetch('/api/service-profile/me', { headers: getAuthHeaders() }))
+          requests.push(
+            fetch('/api/service-profile/me', { headers: getAuthHeaders() }),
+            fetch('/api/service-profile/me/availability-calendar?days=30', { headers: getAuthHeaders() }),
+          )
         } else {
           requests.push(
-            fetch('/api/musicians', { headers: getAuthHeaders() }),
+            fetch('/api/public/service-providers'),
             fetch('/api/performance-requests', { headers: getAuthHeaders() }),
           )
         }
@@ -256,7 +308,10 @@ function AppShell() {
         const [dashboardResponse] = responses
 
         if ([401, 403].includes(dashboardResponse.status)) {
-          throw new Error('Session expired')
+          if (!ignore) {
+            setMessage('Your session is still active, but the dashboard could not be refreshed right now.')
+          }
+          return
         }
 
         if (ignore) {
@@ -264,7 +319,10 @@ function AppShell() {
         }
 
         if (!dashboardResponse.ok) {
-          throw new Error('Unable to load protected data')
+          if (!ignore) {
+            setMessage('Your session is still active, but some data could not be refreshed right now.')
+          }
+          return
         }
 
         const dashboardData = await dashboardResponse.json()
@@ -272,9 +330,11 @@ function AppShell() {
 
         if (isServiceProviderRole) {
           const profileResponse = responses[1]
+          const availabilityResponse = responses[2]
           if (profileResponse.status === 404) {
             setServiceProfile(null)
             setServiceProfileForm(emptyServiceProfileForm)
+            setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
             setProfileMessage('No profile exists yet. Create your profile to get started.')
           } else if (profileResponse.ok) {
             const profileData = await profileResponse.json()
@@ -287,38 +347,51 @@ function AppShell() {
               phone: profileData.phone,
               bio: profileData.bio || emptyServiceProfileForm.bio,
               rate: profileData.rate || emptyServiceProfileForm.rate,
+              preferred_event_type: profileData.preferred_event_type || emptyServiceProfileForm.preferred_event_type,
+              preferred_contact_method:
+                profileData.preferred_contact_method || emptyServiceProfileForm.preferred_contact_method,
               available_weekends: profileData.available_weekends,
+              travel_buffer_minutes: profileData.travel_buffer_minutes ?? 120,
             })
             setProfileMessage('')
+
+            if (availabilityResponse.ok) {
+              const availabilityData = await availabilityResponse.json()
+              setProviderAvailabilityCalendar(availabilityData)
+            } else {
+              setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+            }
           } else {
             throw new Error('Unable to load your service profile')
           }
 
           setMusicians([])
           setPerformanceRequests([])
+          setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
           return
         }
 
         const [musiciansResponse, requestResponse] = responses.slice(1)
 
-        if ([musiciansResponse, requestResponse].some((response) => response.status === 401)) {
-          throw new Error('Session expired')
+        if (requestResponse.status === 401) {
+          setPerformanceRequests([])
+          setMessage('Your performance requests could not be refreshed right now, but you remain signed in.')
+        } else if (!requestResponse.ok) {
+          setPerformanceRequests([])
+        } else {
+          const requestData = await requestResponse.json()
+          setPerformanceRequests(requestData)
         }
 
-        if ([musiciansResponse, requestResponse].some((response) => !response.ok)) {
-          throw new Error('Unable to load protected data')
+        if (musiciansResponse.ok) {
+          const musiciansData = await musiciansResponse.json()
+          setMusicians(musiciansData)
+        } else {
+          setMusicians([])
         }
-
-        const [musiciansData, requestData] = await Promise.all([
-          musiciansResponse.json(),
-          requestResponse.json(),
-        ])
-
-        setMusicians(musiciansData)
-        setPerformanceRequests(requestData)
       } catch {
         if (!ignore) {
-          clearSession('Session expired. Sign in again with your email address.')
+          setMessage('Some data could not be refreshed right now, but your session remains active until you sign out.')
         }
       } finally {
         if (!ignore) {
@@ -340,6 +413,84 @@ function AppShell() {
   }, [currentUser])
 
   useEffect(() => {
+    if (currentUser || location.pathname !== '/request-performance') {
+      return
+    }
+
+    setAuthMode('login')
+    setAuthMessage('Please sign in to request a performance.')
+    setPostAuthRedirect('/request-performance')
+    setIsAuthModalOpen(true)
+    navigate('/', { replace: true })
+  }, [currentUser, location.pathname, navigate])
+
+  useEffect(() => {
+    let ignore = false
+
+    async function loadSelectedProviderAvailability() {
+      if (!currentUser || !canAccessRole(currentUser.role, ['CONSUMER'])) {
+        if (!ignore) {
+          setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
+          setAvailabilityMessage('')
+          setIsLoadingAvailability(false)
+        }
+        return
+      }
+
+      const providerId = Number(requestForm.musician_id)
+      if (!providerId) {
+        if (!ignore) {
+          setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
+          setAvailabilityMessage('Select a service provider to view their availability calendar.')
+          setIsLoadingAvailability(false)
+        }
+        return
+      }
+
+      setIsLoadingAvailability(true)
+      setAvailabilityMessage('')
+      try {
+        const response = await fetch(`/api/service-providers/${providerId}/availability-calendar?days=30`, {
+          headers: getAuthHeaders(),
+        })
+
+        if (!response.ok) {
+          throw new Error('Unable to load availability')
+        }
+
+        const calendarData = await response.json()
+        if (!ignore) {
+          setCustomerAvailabilityCalendar(calendarData)
+          const hasAnySlots = Array.isArray(calendarData.days)
+            ? calendarData.days.some((day) => Array.isArray(day.slots) && day.slots.length > 0)
+            : false
+
+          setAvailabilityMessage(
+            hasAnySlots
+              ? `All times shown in ${calendarData.timezone_label}. This provider requires at least ${calendarData.travel_buffer_minutes} minutes between bookings.`
+              : 'No availability slots have been published for the next 30 days.',
+          )
+        }
+      } catch {
+        if (!ignore) {
+          setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
+          setAvailabilityMessage('Could not load availability right now.')
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoadingAvailability(false)
+        }
+      }
+    }
+
+    loadSelectedProviderAvailability()
+
+    return () => {
+      ignore = true
+    }
+  }, [currentUser, requestForm.musician_id])
+
+  useEffect(() => {
     let ignore = false
 
     async function loadPublicLandingData() {
@@ -353,24 +504,19 @@ function AppShell() {
       setPublicLoading(true)
 
       try {
-        const [providersResponse, eventsResponse] = await Promise.all([
-          fetch('/api/public/service-providers'),
-          fetch('/api/public/event-requests'),
-        ])
+        const providersResponse = await fetch('/api/public/service-providers')
 
-        if (!providersResponse.ok || !eventsResponse.ok) {
+        if (!providersResponse.ok) {
           throw new Error('Unable to load public landing data')
         }
 
-        const [providers, events] = await Promise.all([providersResponse.json(), eventsResponse.json()])
+        const providers = await providersResponse.json()
         if (!ignore) {
           setPublicServiceProviders(providers)
-          setPublicEventRequests(events)
         }
       } catch {
         if (!ignore) {
           setPublicServiceProviders([])
-          setPublicEventRequests([])
         }
       } finally {
         if (!ignore) {
@@ -417,14 +563,21 @@ function AppShell() {
     }
 
     if (password.length < 8) {
-      setAuthMessage('Password must be at least 8 characters long.')
+      setAuthMessage(authMode === 'reset' ? 'New password must be at least 8 characters long.' : 'Password must be at least 8 characters long.')
+      setIsLoading(false)
+      return
+    }
+
+    if (authMode === 'reset' && authForm.confirmPassword.trim() !== password) {
+      setAuthMessage('New passwords do not match. Please enter the same password in both fields.')
       setIsLoading(false)
       return
     }
 
     try {
       const isRegisterMode = authMode === 'register'
-      const response = await fetch(isRegisterMode ? '/api/auth/register' : '/api/auth/login', {
+      const isResetMode = authMode === 'reset'
+      const response = await fetch(isRegisterMode ? '/api/auth/register' : isResetMode ? '/api/auth/reset-password' : '/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -439,7 +592,14 @@ function AppShell() {
       const payload = await response.json().catch(() => null)
 
       if (!response.ok) {
-        setAuthMessage(formatAuthError(payload?.detail, 'Could not open this account.'))
+        setAuthMessage(formatAuthError(payload?.detail, isResetMode ? 'Password reset failed. Check the email address and try again.' : 'Could not open this account.'))
+        return
+      }
+
+      if (isResetMode) {
+        setAuthMode('login')
+        setAuthForm({ email, password: '', confirmPassword: '', role: 'CONSUMER' })
+        setAuthMessage(payload?.message || 'Password updated. You can sign in with your new password.')
         return
       }
 
@@ -448,9 +608,12 @@ function AppShell() {
       setCurrentUser(user)
       setAccessToken(accessTokenValue)
       setAuthMode('login')
-      setAuthForm({ email: user.email, password: '', role: user.role })
+      setAuthForm({ email: user.email, password: '', confirmPassword: '', role: user.role })
       setAuthMessage('')
-      navigate(getDefaultRoute(user.role), { replace: true })
+      setIsAuthModalOpen(false)
+        const redirectTo = postAuthRedirect || getDefaultRoute(user.role) || '/'
+      setPostAuthRedirect('')
+      navigate(redirectTo, { replace: true })
     } catch {
       setAuthMessage('Unable to contact the server. Check that the backend is running and try again.')
     } finally {
@@ -495,6 +658,15 @@ function AppShell() {
     event.preventDefault()
     setMessage('')
 
+    const hasPublishedAvailability = Array.isArray(customerAvailabilityCalendar.days)
+      ? customerAvailabilityCalendar.days.some((day) => Array.isArray(day.slots) && day.slots.length > 0)
+      : false
+
+    if (hasPublishedAvailability && !requestForm.event_datetime) {
+      setMessage('Choose one of the provider\'s published time slots from the availability calendar.')
+      return
+    }
+
     const payload = {
       ...requestForm,
       musician_id: Number(requestForm.musician_id),
@@ -515,7 +687,8 @@ function AppShell() {
     })
 
     if (!response.ok) {
-      setMessage('Could not save the performance request.')
+      const payload = await response.json().catch(() => null)
+      setMessage(formatAuthError(payload?.detail, 'Could not save the performance request.'))
       return
     }
 
@@ -525,6 +698,18 @@ function AppShell() {
       ...emptyRequestForm,
       musician_id: current.musician_id,
     }))
+
+    const providerId = Number(payload.musician_id)
+    if (providerId) {
+      const availabilityRefresh = await fetch(`/api/service-providers/${providerId}/availability-calendar?days=30`, {
+        headers: getAuthHeaders(),
+      })
+      if (availabilityRefresh.ok) {
+        const calendarData = await availabilityRefresh.json()
+        setCustomerAvailabilityCalendar(calendarData)
+      }
+    }
+
     setMessage('Your performance request was submitted to the local musician list.')
   }
 
@@ -559,13 +744,134 @@ function AppShell() {
         phone: payload.phone,
         bio: payload.bio,
         rate: payload.rate,
+        preferred_event_type: payload.preferred_event_type,
+        preferred_contact_method: payload.preferred_contact_method,
         available_weekends: payload.available_weekends,
+        travel_buffer_minutes: payload.travel_buffer_minutes ?? 120,
       })
       setProfileMessage('Your service provider profile was saved.')
+
+      const availabilityResponse = await fetch('/api/service-profile/me/availability-calendar?days=30', {
+        headers: getAuthHeaders(),
+      })
+      if (availabilityResponse.ok) {
+        const availabilityData = await availabilityResponse.json()
+        setProviderAvailabilityCalendar(availabilityData)
+      }
     } catch {
       setProfileMessage('Unable to contact the server. Check that the backend is running and try again.')
     } finally {
       setIsSavingProfile(false)
+    }
+  }
+
+  async function handleCreateAvailabilitySlot({ startsAt, endsAt }) {
+    setAvailabilityMessage('')
+    setIsSavingAvailability(true)
+    try {
+      const createResponse = await fetch('/api/service-profile/me/availability', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          starts_at: startsAt,
+          ends_at: endsAt,
+        }),
+      })
+
+      const createPayload = await createResponse.json().catch(() => null)
+      if (!createResponse.ok) {
+        setAvailabilityMessage(formatAuthError(createPayload?.detail, 'Could not save availability slot.'))
+        return false
+      }
+
+      const calendarResponse = await fetch('/api/service-profile/me/availability-calendar?days=30', {
+        headers: getAuthHeaders(),
+      })
+      if (calendarResponse.ok) {
+        const calendarData = await calendarResponse.json()
+        setProviderAvailabilityCalendar(calendarData)
+        setAvailabilityMessage('Availability slot added.')
+      }
+      return true
+    } catch {
+      setAvailabilityMessage('Unable to contact the server. Check that the backend is running and try again.')
+      return false
+    } finally {
+      setIsSavingAvailability(false)
+    }
+  }
+
+  async function handleDeleteAvailabilitySlot(slotId) {
+    setAvailabilityMessage('')
+    setIsSavingAvailability(true)
+    try {
+      const deleteResponse = await fetch(`/api/service-profile/me/availability/${slotId}`, {
+        method: 'DELETE',
+        headers: {
+          ...getAuthHeaders(),
+        },
+      })
+
+      const deletePayload = await deleteResponse.json().catch(() => null)
+      if (!deleteResponse.ok) {
+        setAvailabilityMessage(formatAuthError(deletePayload?.detail, 'Could not delete availability slot.'))
+        return
+      }
+
+      const calendarResponse = await fetch('/api/service-profile/me/availability-calendar?days=30', {
+        headers: getAuthHeaders(),
+      })
+      if (calendarResponse.ok) {
+        const calendarData = await calendarResponse.json()
+        setProviderAvailabilityCalendar(calendarData)
+      }
+      setAvailabilityMessage('Availability slot removed.')
+    } catch {
+      setAvailabilityMessage('Unable to contact the server. Check that the backend is running and try again.')
+    } finally {
+      setIsSavingAvailability(false)
+    }
+  }
+
+  async function handleUpdateAvailabilitySlot(slotId, { startsAt, endsAt }) {
+    setAvailabilityMessage('')
+    setIsSavingAvailability(true)
+    try {
+      const updateResponse = await fetch(`/api/service-profile/me/availability/${slotId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          starts_at: startsAt,
+          ends_at: endsAt,
+        }),
+      })
+
+      const updatePayload = await updateResponse.json().catch(() => null)
+      if (!updateResponse.ok) {
+        setAvailabilityMessage(formatAuthError(updatePayload?.detail, 'Could not update availability slot.'))
+        return false
+      }
+
+      const calendarResponse = await fetch('/api/service-profile/me/availability-calendar?days=30', {
+        headers: getAuthHeaders(),
+      })
+      if (calendarResponse.ok) {
+        const calendarData = await calendarResponse.json()
+        setProviderAvailabilityCalendar(calendarData)
+      }
+      setAvailabilityMessage('Availability slot updated.')
+      return true
+    } catch {
+      setAvailabilityMessage('Unable to contact the server. Check that the backend is running and try again.')
+      return false
+    } finally {
+      setIsSavingAvailability(false)
     }
   }
 
@@ -592,15 +898,12 @@ function AppShell() {
                 <a className="nav-link" href="#service-providers">
                   Service provider profiles
                 </a>
-                <a className="nav-link" href="#event-requests">
-                  Event requests
-                </a>
 
                 <div className="header-auth-actions">
-                  <button className="button secondary slim-button nav-button" type="button" onClick={() => handleAuthModeChange('login')}>
+                  <button className="button secondary slim-button nav-button" type="button" onClick={() => openAuthModal('login')}>
                     Login
                   </button>
-                  <button className="button primary slim-button nav-button" type="button" onClick={() => handleAuthModeChange('register')}>
+                  <button className="button primary slim-button nav-button" type="button" onClick={() => openAuthModal('register')}>
                     Register
                   </button>
                 </div>
@@ -614,25 +917,32 @@ function AppShell() {
               isLoading={publicLoading}
               currentUser={null}
               canEnroll={false}
-              canRequest={false}
+                  canRequest={false}
+                  onRequest={() => openAuthModal('login', '/request-performance')}
               publicServiceProviders={publicServiceProviders}
-              publicEventRequests={publicEventRequests}
               isLanding
             />
-
-            <section id="auth" className="section-anchor landing-auth-section">
-              <AuthPage
-                authForm={authForm}
-                setAuthForm={setAuthForm}
-                onSubmit={handleAuthSubmit}
-                isLoading={isLoading}
-                adminEmail={ADMIN_EMAIL}
-                authMode={authMode}
-                setAuthMode={handleAuthModeChange}
-                message={authMessage}
-              />
-            </section>
           </main>
+
+          {isAuthModalOpen ? (
+            <div className="auth-modal-backdrop" role="dialog" aria-modal="true" aria-label="Authentication" onClick={closeAuthModal}>
+              <div className="auth-modal-panel" onClick={(event) => event.stopPropagation()}>
+                <button className="chip auth-modal-close" type="button" onClick={closeAuthModal}>
+                  Close
+                </button>
+                <AuthPage
+                  authForm={authForm}
+                  setAuthForm={setAuthForm}
+                  onSubmit={handleAuthSubmit}
+                  isLoading={isLoading}
+                  adminEmail={ADMIN_EMAIL}
+                  authMode={authMode}
+                  setAuthMode={handleAuthModeChange}
+                  message={authMessage}
+                />
+              </div>
+            </div>
+          ) : null}
         </>
       ) : null}
 
@@ -717,8 +1027,15 @@ function AppShell() {
                       onSubmit={handleServiceProfileSubmit}
                       currentUser={currentUser}
                       isSaving={isSavingProfile}
+                      isSavingAvailability={isSavingAvailability}
                       hasProfile={Boolean(serviceProfile)}
                       message={profileMessage}
+                      availabilityMessage={availabilityMessage}
+                      availabilityCalendar={providerAvailabilityCalendar}
+                      preferredEventTypes={providerEventTypes}
+                      onCreateAvailabilitySlot={handleCreateAvailabilitySlot}
+                      onUpdateAvailabilitySlot={handleUpdateAvailabilitySlot}
+                      onDeleteAvailabilitySlot={handleDeleteAvailabilitySlot}
                     />
                   </RouteGuard>
                 }
@@ -746,6 +1063,9 @@ function AppShell() {
                       musicians={musicians}
                       performanceRequests={performanceRequests}
                       selectedMusician={selectedMusician}
+                      availabilityCalendar={customerAvailabilityCalendar}
+                      availabilityMessage={availabilityMessage}
+                      isLoadingAvailability={isLoadingAvailability}
                       onSubmit={handleRequestSubmit}
                     />
                   </RouteGuard>

@@ -4,14 +4,33 @@ const authRoles = [
   { value: 'ADMIN', label: 'ADMIN', description: 'Reserved for the admin email.' },
 ]
 
-export default function AuthPage({ authForm, setAuthForm, onSubmit, isLoading, adminEmail, authMode, setAuthMode, message }) {
+export default function AuthPage({
+  authForm,
+  setAuthForm,
+  onSubmit,
+  isLoading,
+  adminEmail,
+  authMode,
+  setAuthMode,
+  message,
+}) {
+  const isResetMode = authMode === 'reset'
+
   return (
     <section className="auth-shell card">
       <div className="auth-copy">
         <p className="eyebrow">Access control</p>
-        <h1>{authMode === 'login' ? 'Sign in to Music Connect.' : 'Create your Music Connect account.'}</h1>
+        <h1>
+          {authMode === 'login'
+            ? 'Sign in to Music Connect.'
+            : authMode === 'register'
+              ? 'Create your Music Connect account.'
+              : 'Create a new password.'}
+        </h1>
         <p className="hero-text">
-          Email is the username. Password is required. During registration, choose a role, and the admin email {adminEmail} is always treated as ADMIN.
+          {isResetMode
+            ? 'Enter your email and choose a new password to update your account.'
+            : `Email is the username. Password is required. During registration, choose a role, and the admin email ${adminEmail} is always treated as ADMIN.`}
         </p>
       </div>
 
@@ -51,10 +70,26 @@ export default function AuthPage({ authForm, setAuthForm, onSubmit, isLoading, a
               type="password"
               value={authForm.password}
               onChange={(event) => setAuthForm({ ...authForm, password: event.target.value })}
-              placeholder="At least 8 characters"
+              placeholder={isResetMode ? 'New password' : 'At least 8 characters'}
               required
             />
           </label>
+
+          {isResetMode ? (
+            <label>
+              Confirm new password
+              <input
+                type="password"
+                value={authForm.confirmPassword || ''}
+                onChange={(event) => setAuthForm({ ...authForm, confirmPassword: event.target.value })}
+                placeholder="Repeat new password"
+                required
+              />
+              <span className="auth-reset-note">
+                Common reset errors: unknown email, passwords that do not match, or a new password shorter than 8 characters.
+              </span>
+            </label>
+          ) : null}
 
           {authMode === 'register' ? (
             <>
@@ -81,13 +116,25 @@ export default function AuthPage({ authForm, setAuthForm, onSubmit, isLoading, a
           ) : null}
 
           <button className="button primary auth-button" type="submit" disabled={isLoading}>
-            {isLoading ? 'Opening account…' : authMode === 'login' ? 'Sign in' : 'Register'}
+            {isLoading ? 'Working…' : authMode === 'login' ? 'Sign in' : authMode === 'register' ? 'Register' : 'Reset password'}
           </button>
         </form>
 
-        <button className="chip auth-inline-switch" type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>
-          {authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Login'}
-        </button>
+        <div className="auth-inline-actions">
+          {authMode === 'login' ? (
+            <button className="auth-text-link" type="button" onClick={() => setAuthMode('reset')}>
+              Reset password
+            </button>
+          ) : null}
+
+          <button
+            className="chip auth-inline-switch"
+            type="button"
+            onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+          >
+            {authMode === 'login' ? 'Need an account? Register' : 'Already have an account? Login'}
+          </button>
+        </div>
 
         {message ? <p className="message-banner auth-message">{message}</p> : null}
       </div>

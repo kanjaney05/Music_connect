@@ -7,7 +7,6 @@ export default function HomePage({
   canEnroll,
   canRequest,
   publicServiceProviders = [],
-  publicEventRequests = [],
   isLanding = false,
 }) {
   if (!isLanding) {
@@ -83,9 +82,11 @@ export default function HomePage({
             <a className="button primary" href="#service-providers">
               View service provider profiles
             </a>
-            <a className="button secondary" href="#event-requests">
-              View event requests
-            </a>
+            {onRequest ? (
+              <button className="button secondary" type="button" onClick={onRequest}>
+                Request a performance
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -142,36 +143,14 @@ export default function HomePage({
                   <span>{provider.rate}</span>
                   <span>{provider.available_weekends ? 'Weekend availability' : 'Weekday-only'}</span>
                 </div>
+                <div className="card-meta">
+                  <span>Preferred event: {provider.preferred_event_type || 'Any event'}</span>
+                  <span>Requests by {provider.preferred_contact_method === 'phone' ? 'phone' : 'email'}</span>
+                </div>
               </article>
             ))
           ) : (
             <article className="loading-state public-empty-state">{isLoading ? 'Loading profiles…' : 'No public profiles yet.'}</article>
-          )}
-        </div>
-      </section>
-
-      <section id="event-requests" className="card list-card landing-section-card section-anchor">
-        <div className="section-head">
-          <p className="eyebrow">Event requests</p>
-          <h2>See community events looking for live music</h2>
-        </div>
-
-        <div className="card-list public-grid">
-          {publicEventRequests.length > 0 ? (
-            publicEventRequests.map((eventRequest) => (
-              <article className="event-card public-event-card" key={eventRequest.id}>
-                <div className="event-topline">
-                  <h3>{eventRequest.title}</h3>
-                  <span className="status-pill">Open</span>
-                </div>
-                <p>{eventRequest.organizer}</p>
-                <p className="event-date">{eventRequest.location}</p>
-                <p>{eventRequest.requested_instruments}</p>
-                <p>{eventRequest.description}</p>
-              </article>
-            ))
-          ) : (
-            <article className="loading-state public-empty-state">{isLoading ? 'Loading event requests…' : 'No public event requests yet.'}</article>
           )}
         </div>
       </section>

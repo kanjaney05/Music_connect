@@ -261,6 +261,33 @@ textarea {
   padding-top: 0.2rem;
 }
 
+.auth-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(18, 38, 42, 0.42);
+  backdrop-filter: blur(4px);
+}
+
+.auth-modal-panel {
+  width: min(1040px, 100%);
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  border-radius: 28px;
+}
+
+.auth-modal-close {
+  position: sticky;
+  top: 0.85rem;
+  right: 0.85rem;
+  margin-left: auto;
+  margin-bottom: 0.6rem;
+  z-index: 2;
+}
+
 .hero-copy h1 {
   font-size: clamp(2.8rem, 7vw, 5.5rem);
   max-width: 11ch;
@@ -464,9 +491,33 @@ textarea {
   flex-wrap: wrap;
 }
 
+.auth-inline-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.65rem;
+}
+
 .auth-inline-switch {
   width: fit-content;
   align-self: start;
+}
+
+.auth-text-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-strong);
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.auth-text-link:hover,
+.auth-text-link:focus-visible {
+  text-decoration: underline;
+  outline: none;
 }
 
 .auth-page {
@@ -530,6 +581,12 @@ textarea {
   font-size: 0.92rem;
 }
 
+.auth-reset-note {
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
 .auth-button {
   width: 100%;
 }
@@ -549,6 +606,75 @@ textarea {
 
 .profile-helper strong {
   color: var(--accent);
+}
+
+.availability-editor {
+  margin-top: 1.1rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0.9rem;
+}
+
+.availability-helper {
+  margin-top: 0;
+}
+
+.availability-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.availability-list {
+  margin-top: 0.5rem;
+}
+
+.availability-day-card {
+  padding: 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.availability-day-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.availability-day-head h3 {
+  margin: 0;
+}
+
+.availability-slot-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.availability-slot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.availability-slot-row p {
+  margin: 0;
+}
+
+.availability-slot-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.availability-edit-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(110px, 1fr)) auto auto;
+  gap: 0.5rem;
+  width: 100%;
 }
 
 .profile-email-readonly {
@@ -701,6 +827,42 @@ label {
   margin-top: 1rem;
 }
 
+.availability-picker {
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.availability-day-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.55rem;
+}
+
+.availability-day-chip {
+  display: grid;
+  justify-items: start;
+  gap: 0.15rem;
+  border-radius: 16px;
+}
+
+.availability-day-chip small {
+  color: var(--muted);
+}
+
+.availability-slot-group {
+  min-height: 90px;
+}
+
+.availability-slot-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
 .loading-state {
   min-height: 240px;
   display: grid;
@@ -714,6 +876,19 @@ label {
   .hero,
   .auth-shell,
   .content-grid,
+
+  .auth-modal-panel {
+    width: min(760px, 100%);
+  }
+
+  .availability-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .availability-edit-form {
+    grid-template-columns: 1fr;
+  }
+
   .field-grid {
     grid-template-columns: 1fr;
   }

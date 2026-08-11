@@ -1,11 +1,13 @@
 export default function MusiciansPage({ musicians, onEnroll, canEnroll, currentUser }) {
+  const isConsumerView = currentUser?.role === 'CONSUMER'
+
   return (
     <section className="content-grid section-anchor musicians-section route-page">
       <article className="card list-card musicians-list-card full-span-card">
         <div className="section-head section-head-row">
           <div>
             <p className="eyebrow">Musicians</p>
-            <h2>Browse local performers</h2>
+            <h2>{isConsumerView ? 'Browse local service providers' : 'Browse local performers'}</h2>
           </div>
           {canEnroll ? (
             <button className="button secondary slim-button" type="button" onClick={onEnroll}>

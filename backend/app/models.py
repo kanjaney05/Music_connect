@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -19,7 +20,10 @@ class ServiceProfile(Base):
     phone: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     email: Mapped[str] = mapped_column(String(180), nullable=False, default="")
     contact: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    preferred_event_type: Mapped[str] = mapped_column(String(120), nullable=False, default="Any event")
+    preferred_contact_method: Mapped[str] = mapped_column(String(20), nullable=False, default="email")
     available_weekends: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    travel_buffer_minutes: Mapped[int] = mapped_column(Integer, default=120, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -57,4 +61,17 @@ class PerformanceRequest(Base):
     musician_id: Mapped[int] = mapped_column(ForeignKey("service_profiles.id"), nullable=False)
     event_datetime: Mapped[str] = mapped_column(String(40), nullable=False)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class AvailabilitySlot(Base):
+    __tablename__ = "availability_slots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    service_profile_id: Mapped[int] = mapped_column(ForeignKey("service_profiles.id"), nullable=False, index=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    is_reserved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reserved_by_request_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reserved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

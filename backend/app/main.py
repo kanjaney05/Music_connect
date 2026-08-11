@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -13,13 +13,19 @@ from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import CommunityEvent, PerformanceRequest, ServiceProfile, User
+from .models import AvailabilitySlot, CommunityEvent, PerformanceRequest, ServiceProfile, User
 from .schemas import (
+    AvailabilityCalendarRead,
+    AvailabilityDayRead,
+    AvailabilitySlotCreate,
+    AvailabilitySlotUpdate,
+    AvailabilitySlotRead,
     ApiMessage,
     AuthLoginRequest,
     AuthRegisterRequest,
     AuthTokenResponse,
     AuthUserRead,
+    AuthResetPasswordRequest,
     CommunityEventCreate,
     CommunityEventRead,
     DashboardResponse,
@@ -37,6 +43,7 @@ ADMIN_INITIAL_PASSWORD = os.environ.get("MUSIC_CONNECT_ADMIN_PASSWORD", "MusicCo
 ALLOWED_ROLES = {"ADMIN", "SERV-PROVIDER", "CONSUMER"}
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_MINUTES = 24 * 60
+AVAILABILITY_WINDOW_DAYS = 30
 PASSWORD_CONTEXT = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 FRONTEND_DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
 
@@ -80,6 +87,7 @@ def startup_event() -> None:
     Base.metadata.create_all(bind=engine)
     ensure_user_columns()
     ensure_service_profile_columns()
+    ensure_availability_slot_columns()
     with Session(engine) as session:
         ensure_admin_user(session)
         backfill_service_profiles(session)
@@ -99,6 +107,8 @@ def startup_event() -> None:
                         phone="(555) 013-2048",
                         email="ava@example.com",
                         contact="(555) 013-2048 | ava@example.com",
+                        preferred_event_type="Community celebration",
+                        preferred_contact_method="email",
                         available_weekends=True,
                     ),
                     ServiceProfile(
@@ -111,6 +121,8 @@ def startup_event() -> None:
                         phone="(555) 015-7781",
                         email="noah@example.com",
                         contact="(555) 015-7781 | noah@example.com",
+                        preferred_event_type="Wedding",
+                        preferred_contact_method="phone",
                         available_weekends=True,
                     ),
                 ]
@@ -210,6 +222,27 @@ def ensure_service_profile_columns() -> None:
             connection.execute(text("ALTER TABLE service_profiles ADD COLUMN phone VARCHAR(40) NOT NULL DEFAULT ''"))
         if "email" not in existing_columns:
             connection.execute(text("ALTER TABLE service_profiles ADD COLUMN email VARCHAR(180) NOT NULL DEFAULT ''"))
+        if "preferred_event_type" not in existing_columns:
+            connection.execute(text("ALTER TABLE service_profiles ADD COLUMN preferred_event_type VARCHAR(120) NOT NULL DEFAULT 'Any event'"))
+        if "preferred_contact_method" not in existing_columns:
+            connection.execute(text("ALTER TABLE service_profiles ADD COLUMN preferred_contact_method VARCHAR(20) NOT NULL DEFAULT 'email'"))
+        if "travel_buffer_minutes" not in existing_columns:
+            connection.execute(text("ALTER TABLE service_profiles ADD COLUMN travel_buffer_minutes INTEGER NOT NULL DEFAULT 120"))
+
+
+def ensure_availability_slot_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("availability_slots"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("availability_slots")}
+    with engine.begin() as connection:
+        if "is_reserved" not in existing_columns:
+            connection.execute(text("ALTER TABLE availability_slots ADD COLUMN is_reserved BOOLEAN NOT NULL DEFAULT 0"))
+        if "reserved_by_request_id" not in existing_columns:
+            connection.execute(text("ALTER TABLE availability_slots ADD COLUMN reserved_by_request_id INTEGER"))
+        if "reserved_at" not in existing_columns:
+            connection.execute(text("ALTER TABLE availability_slots ADD COLUMN reserved_at DATETIME"))
 
 
 def backfill_service_profiles(session: Session) -> None:
@@ -236,9 +269,103 @@ def backfill_service_profiles(session: Session) -> None:
                 if not profile.email.strip():
                     profile.email = contact_parts[0] if '@' in contact_parts[0] else 'musician@example.com'
 
+        if not profile.preferred_event_type.strip():
+            profile.preferred_event_type = 'Any event'
+
+        if profile.preferred_contact_method.strip().lower() not in {'email', 'phone'}:
+            profile.preferred_contact_method = 'email'
+
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def get_timezone_label() -> str:
+    tz_name = datetime.now().astimezone().tzname()
+    return tz_name or "Local time"
+
+
+def get_calendar_window(days: int = AVAILABILITY_WINDOW_DAYS) -> tuple[date, date]:
+    safe_days = max(1, min(days, AVAILABILITY_WINDOW_DAYS))
+    start_date = datetime.now().date()
+    end_date = start_date + timedelta(days=safe_days - 1)
+    return start_date, end_date
+
+
+def normalize_slot_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+
+    return value.replace(second=0, microsecond=0)
+
+
+def find_conflicting_slot(
+    db: Session,
+    provider_id: int,
+    starts_at: datetime,
+    ends_at: datetime,
+    travel_buffer_minutes: int,
+    ignore_slot_id: Optional[int] = None,
+) -> Optional[AvailabilitySlot]:
+    existing_slots = db.scalars(
+        select(AvailabilitySlot)
+        .where(AvailabilitySlot.service_profile_id == provider_id)
+        .order_by(AvailabilitySlot.starts_at.asc())
+    ).all()
+    buffer_delta = timedelta(minutes=max(travel_buffer_minutes, 0))
+
+    for slot in existing_slots:
+        if ignore_slot_id is not None and slot.id == ignore_slot_id:
+            continue
+
+        if starts_at < slot.ends_at + buffer_delta and ends_at > slot.starts_at - buffer_delta:
+            return slot
+
+    return None
+
+
+def build_availability_calendar(
+    db: Session,
+    provider_id: int,
+    travel_buffer_minutes: int,
+    days: int = AVAILABILITY_WINDOW_DAYS,
+    include_reserved: bool = True,
+) -> AvailabilityCalendarRead:
+    start_date, end_date = get_calendar_window(days)
+    window_start = datetime.combine(start_date, time.min)
+    window_end = datetime.combine(end_date + timedelta(days=1), time.min)
+
+    statement = (
+        select(AvailabilitySlot)
+        .where(AvailabilitySlot.service_profile_id == provider_id)
+        .where(AvailabilitySlot.starts_at >= window_start)
+        .where(AvailabilitySlot.starts_at < window_end)
+        .order_by(AvailabilitySlot.starts_at.asc())
+    )
+    if not include_reserved:
+        statement = statement.where(AvailabilitySlot.is_reserved.is_(False))
+
+    slots = list(db.scalars(statement))
+
+    slots_by_day: dict[str, list[AvailabilitySlotRead]] = {}
+    for slot in slots:
+        day_key = slot.starts_at.date().isoformat()
+        slots_by_day.setdefault(day_key, []).append(AvailabilitySlotRead.model_validate(slot))
+
+    days_payload: list[AvailabilityDayRead] = []
+    for offset in range((end_date - start_date).days + 1):
+        day = start_date + timedelta(days=offset)
+        day_key = day.isoformat()
+        days_payload.append(AvailabilityDayRead(date=day_key, slots=slots_by_day.get(day_key, [])))
+
+    return AvailabilityCalendarRead(
+        provider_id=provider_id,
+        travel_buffer_minutes=travel_buffer_minutes,
+        timezone_label=get_timezone_label(),
+        from_date=start_date.isoformat(),
+        to_date=end_date.isoformat(),
+        days=days_payload,
+    )
 
 
 def create_access_token(user: User) -> str:
@@ -364,6 +491,20 @@ def login_user(payload: AuthLoginRequest, db: Session = Depends(get_db)) -> Auth
     return AuthTokenResponse(**user_data.model_dump(), access_token=token)
 
 
+@app.post("/api/auth/reset-password", response_model=ApiMessage)
+def reset_password(payload: AuthResetPasswordRequest, db: Session = Depends(get_db)) -> ApiMessage:
+    normalized_email = normalize_email(payload.email)
+    user = get_user_by_email(db, normalized_email)
+
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown user")
+
+    user.password_hash = hash_password(payload.password)
+    db.commit()
+
+    return ApiMessage(message="Password updated. You can sign in with your new password.")
+
+
 @app.get("/api/auth/me", response_model=AuthUserRead)
 def read_current_user(user: User = Depends(get_current_user)) -> User:
     return user
@@ -463,11 +604,138 @@ def upsert_own_service_profile(
     profile.contact = f"{data['phone']} | {user.email}"
     profile.bio = data.get("bio") or "Community musician available for local events."
     profile.rate = data.get("rate") or "Available upon request"
+    profile.preferred_event_type = data.get("preferred_event_type", "Any event")
+    profile.preferred_contact_method = data.get("preferred_contact_method", "email")
     profile.available_weekends = data.get("available_weekends", True)
+    profile.travel_buffer_minutes = data.get("travel_buffer_minutes", 120)
 
     db.commit()
     db.refresh(profile)
     return profile
+
+
+@app.get("/api/service-profile/me/availability-calendar", response_model=AvailabilityCalendarRead)
+def read_own_availability_calendar(
+    days: int = AVAILABILITY_WINDOW_DAYS,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER")),
+) -> AvailabilityCalendarRead:
+    profile = get_service_profile_by_email(db, user.email)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Service profile not found")
+
+    return build_availability_calendar(db, profile.id, profile.travel_buffer_minutes, days=days)
+
+
+@app.post("/api/service-profile/me/availability", response_model=AvailabilitySlotRead, status_code=201)
+def create_own_availability_slot(
+    payload: AvailabilitySlotCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER")),
+) -> AvailabilitySlot:
+    profile = get_service_profile_by_email(db, user.email)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Create your service profile before adding availability")
+
+    starts_at = normalize_slot_datetime(payload.starts_at)
+    ends_at = normalize_slot_datetime(payload.ends_at)
+    if ends_at <= starts_at:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    if starts_at.date() < datetime.now().date():
+        raise HTTPException(status_code=400, detail="Availability slots cannot be created in the past")
+
+    conflicting_slot = find_conflicting_slot(db, profile.id, starts_at, ends_at, profile.travel_buffer_minutes)
+    if conflicting_slot is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This slot conflicts with existing availability. "
+                f"Keep at least {profile.travel_buffer_minutes} minutes between performances."
+            ),
+        )
+
+    slot = AvailabilitySlot(
+        service_profile_id=profile.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+    db.add(slot)
+    db.commit()
+    db.refresh(slot)
+    return slot
+
+
+@app.put("/api/service-profile/me/availability/{slot_id}", response_model=AvailabilitySlotRead)
+def update_own_availability_slot(
+    slot_id: int,
+    payload: AvailabilitySlotUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER")),
+) -> AvailabilitySlot:
+    profile = get_service_profile_by_email(db, user.email)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Service profile not found")
+
+    slot = db.get(AvailabilitySlot, slot_id)
+    if slot is None or slot.service_profile_id != profile.id:
+        raise HTTPException(status_code=404, detail="Availability slot not found")
+
+    if slot.is_reserved:
+        raise HTTPException(status_code=400, detail="Reserved slots cannot be edited")
+
+    starts_at = normalize_slot_datetime(payload.starts_at)
+    ends_at = normalize_slot_datetime(payload.ends_at)
+    if ends_at <= starts_at:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    if starts_at.date() < datetime.now().date():
+        raise HTTPException(status_code=400, detail="Availability slots cannot be moved to the past")
+
+    conflicting_slot = find_conflicting_slot(
+        db,
+        profile.id,
+        starts_at,
+        ends_at,
+        profile.travel_buffer_minutes,
+        ignore_slot_id=slot.id,
+    )
+    if conflicting_slot is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This slot conflicts with existing availability. "
+                f"Keep at least {profile.travel_buffer_minutes} minutes between performances."
+            ),
+        )
+
+    slot.starts_at = starts_at
+    slot.ends_at = ends_at
+    db.commit()
+    db.refresh(slot)
+    return slot
+
+
+@app.delete("/api/service-profile/me/availability/{slot_id}", response_model=ApiMessage)
+def delete_own_availability_slot(
+    slot_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER")),
+) -> ApiMessage:
+    profile = get_service_profile_by_email(db, user.email)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Service profile not found")
+
+    slot = db.get(AvailabilitySlot, slot_id)
+    if slot is None or slot.service_profile_id != profile.id:
+        raise HTTPException(status_code=404, detail="Availability slot not found")
+
+    if slot.is_reserved:
+        raise HTTPException(status_code=400, detail="Reserved slots cannot be removed")
+
+    db.delete(slot)
+    db.commit()
+    return ApiMessage(message="Availability slot removed")
 
 
 def build_musician(payload: ServiceProfileCreate) -> ServiceProfile:
@@ -482,7 +750,10 @@ def build_musician(payload: ServiceProfileCreate) -> ServiceProfile:
         phone=data["phone"],
         email=data["email"],
         contact=f"{data['phone']} | {data['email']}",
+        preferred_event_type=data.get("preferred_event_type") or "Any event",
+        preferred_contact_method=data.get("preferred_contact_method") or "email",
         available_weekends=data.get("available_weekends", True),
+        travel_buffer_minutes=data.get("travel_buffer_minutes", 120),
     )
 
 
@@ -539,11 +810,60 @@ def create_performance_request(
     if musician is None:
         raise HTTPException(status_code=404, detail="Musician not found")
 
+    try:
+        requested_start = normalize_slot_datetime(datetime.fromisoformat(payload.event_datetime))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Event date and time must be in ISO format") from exc
+
+    slot_count = db.scalar(
+        select(func.count())
+        .select_from(AvailabilitySlot)
+        .where(AvailabilitySlot.service_profile_id == musician.id)
+    ) or 0
+    selected_slot: Optional[AvailabilitySlot] = None
+    if slot_count > 0:
+        selected_slot = db.scalar(
+            select(AvailabilitySlot)
+            .where(AvailabilitySlot.service_profile_id == musician.id)
+            .where(AvailabilitySlot.starts_at == requested_start)
+        )
+        if selected_slot is None:
+            raise HTTPException(status_code=400, detail="Choose a published availability slot from the calendar")
+        if selected_slot.is_reserved:
+            raise HTTPException(status_code=409, detail="This slot was just booked. Please choose another time slot.")
+
     performance_request = PerformanceRequest(**payload.model_dump())
     db.add(performance_request)
+    db.flush()
+
+    if selected_slot is not None:
+        selected_slot.is_reserved = True
+        selected_slot.reserved_by_request_id = performance_request.id
+        selected_slot.reserved_at = datetime.utcnow()
+
     db.commit()
     db.refresh(performance_request)
     return performance_request
+
+
+@app.get("/api/service-providers/{provider_id}/availability-calendar", response_model=AvailabilityCalendarRead)
+def read_provider_availability_calendar(
+    provider_id: int,
+    days: int = AVAILABILITY_WINDOW_DAYS,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("CONSUMER")),
+) -> AvailabilityCalendarRead:
+    provider = db.get(ServiceProfile, provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Service profile not found")
+
+    return build_availability_calendar(
+        db,
+        provider.id,
+        provider.travel_buffer_minutes,
+        days=days,
+        include_reserved=False,
+    )
 
 
 @app.get("/api/services/{service_id}", response_model=ServiceProfileRead)
