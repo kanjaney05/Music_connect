@@ -216,6 +216,8 @@ def ensure_service_profile_columns() -> None:
 
     existing_columns = {column["name"] for column in inspector.get_columns("service_profiles")}
     with engine.begin() as connection:
+        if "owner_email" not in existing_columns:
+            connection.execute(text("ALTER TABLE service_profiles ADD COLUMN owner_email VARCHAR(180) NOT NULL DEFAULT ''"))
         if "state" not in existing_columns:
             connection.execute(text("ALTER TABLE service_profiles ADD COLUMN state VARCHAR(80) NOT NULL DEFAULT ''"))
         if "phone" not in existing_columns:
@@ -389,7 +391,12 @@ def get_user_by_email(session: Session, email: str) -> Optional[User]:
 
 
 def get_service_profile_by_email(session: Session, email: str) -> Optional[ServiceProfile]:
-    return session.scalar(select(ServiceProfile).where(ServiceProfile.email == normalize_email(email)))
+    normalized_email = normalize_email(email)
+    return session.scalar(
+        select(ServiceProfile).where(
+            (ServiceProfile.owner_email == normalized_email) | (ServiceProfile.email == normalized_email)
+        )
+    )
 
 
 def get_current_user(
@@ -548,9 +555,10 @@ def list_services(
 def create_musician(
     payload: ServiceProfileCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER")),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
 ) -> ServiceProfile:
     musician = build_musician(payload)
+    musician.owner_email = normalize_email(user.email)
     db.add(musician)
     db.commit()
     db.refresh(musician)
@@ -573,7 +581,7 @@ def create_service(
 @app.get("/api/service-profile/me", response_model=ServiceProfileRead)
 def read_own_service_profile(
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER")),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
 ) -> ServiceProfile:
     profile = get_service_profile_by_email(db, user.email)
     if profile is None:
@@ -586,15 +594,20 @@ def read_own_service_profile(
 def upsert_own_service_profile(
     payload: ServiceProfileUpsert,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER")),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
 ) -> ServiceProfile:
     profile = get_service_profile_by_email(db, user.email)
     data = payload.model_dump()
 
     if profile is None:
-        profile = ServiceProfile(email=normalize_email(user.email), contact=f"{data['phone']} | {user.email}")
+        profile = ServiceProfile(
+            owner_email=normalize_email(user.email),
+            email=normalize_email(user.email),
+            contact=f"{data['phone']} | {user.email}",
+        )
         db.add(profile)
 
+    profile.owner_email = normalize_email(user.email)
     profile.full_name = data["full_name"]
     profile.instrument = data["instrument"]
     profile.city = data["city"]
@@ -618,7 +631,7 @@ def upsert_own_service_profile(
 def read_own_availability_calendar(
     days: int = AVAILABILITY_WINDOW_DAYS,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER")),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
 ) -> AvailabilityCalendarRead:
     profile = get_service_profile_by_email(db, user.email)
     if profile is None:
@@ -631,7 +644,7 @@ def read_own_availability_calendar(
 def create_own_availability_slot(
     payload: AvailabilitySlotCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER")),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
 ) -> AvailabilitySlot:
     profile = get_service_profile_by_email(db, user.email)
     if profile is None:
@@ -671,7 +684,7 @@ def update_own_availability_slot(
     slot_id: int,
     payload: AvailabilitySlotUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER")),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
 ) -> AvailabilitySlot:
     profile = get_service_profile_by_email(db, user.email)
     if profile is None:
@@ -720,7 +733,7 @@ def update_own_availability_slot(
 def delete_own_availability_slot(
     slot_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER")),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
 ) -> ApiMessage:
     profile = get_service_profile_by_email(db, user.email)
     if profile is None:

@@ -76,6 +76,7 @@ class ServiceProfileRead(ServiceProfileBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    owner_email: str
 
     full_name: str
     instrument: str

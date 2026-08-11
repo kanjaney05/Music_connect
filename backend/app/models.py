@@ -11,6 +11,7 @@ class ServiceProfile(Base):
     __tablename__ = "service_profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    owner_email: Mapped[str] = mapped_column(String(180), nullable=False, default="")
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     instrument: Mapped[str] = mapped_column(String(80), nullable=False)
     city: Mapped[str] = mapped_column(String(120), nullable=False)

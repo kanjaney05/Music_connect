@@ -1,7 +1,7 @@
 const authRoles = [
   { value: 'CONSUMER', label: 'CONSUMER', description: 'Browse musicians and request performances.' },
   { value: 'SERV-PROVIDER', label: 'SERV-PROVIDER', description: 'Enroll and manage musician profiles.' },
-  { value: 'ADMIN', label: 'ADMIN', description: 'Reserved for the admin email.' },
+  { value: 'ADMIN', label: 'ADMIN', description: 'Reserved for the admin email. Can enroll musicians like a service provider.' },
 ]
 
 export default function AuthPage({

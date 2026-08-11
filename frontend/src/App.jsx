@@ -52,7 +52,7 @@ const emptyAvailabilityCalendar = {
 const eventTypes = ['Community celebration', 'Birthday', 'Wedding', 'Fundraiser', 'School concert', 'Other event']
 const protectedRoles = {
   musicians: ['SERV-PROVIDER'],
-  requests: ['CONSUMER'],
+  requests: ['CONSUMER', 'ADMIN'],
 }
 
 function getDefaultRoute(role) {
@@ -69,6 +69,14 @@ function getDefaultRoute(role) {
 
 function canAccessRole(role, allowedRoles) {
   return role === 'ADMIN' || allowedRoles.includes(role)
+}
+
+function canEnrollMusician(role) {
+  return role === 'SERV-PROVIDER' || role === 'ADMIN'
+}
+
+function canRequestPerformance(role) {
+  return role === 'CONSUMER' || role === 'ADMIN'
 }
 
 function formatAuthError(detail, fallbackMessage) {
@@ -288,16 +296,21 @@ function AppShell() {
       }
 
       const isServiceProviderRole = currentUser.role === 'SERV-PROVIDER'
+      const isAdminRole = currentUser.role === 'ADMIN'
+      const shouldLoadProfile = isServiceProviderRole || isAdminRole
+      const shouldLoadRequesterData = currentUser.role === 'CONSUMER' || isAdminRole
 
       try {
         const requests = [fetch('/api/dashboard', { headers: getAuthHeaders() })]
 
-        if (isServiceProviderRole) {
+        if (shouldLoadProfile) {
           requests.push(
             fetch('/api/service-profile/me', { headers: getAuthHeaders() }),
             fetch('/api/service-profile/me/availability-calendar?days=30', { headers: getAuthHeaders() }),
           )
-        } else {
+        }
+
+        if (shouldLoadRequesterData) {
           requests.push(
             fetch('/api/public/service-providers'),
             fetch('/api/performance-requests', { headers: getAuthHeaders() }),
@@ -328,7 +341,7 @@ function AppShell() {
         const dashboardData = await dashboardResponse.json()
         setDashboard(dashboardData)
 
-        if (isServiceProviderRole) {
+        if (shouldLoadProfile) {
           const profileResponse = responses[1]
           const availabilityResponse = responses[2]
           if (profileResponse.status === 404) {
@@ -365,13 +378,15 @@ function AppShell() {
             throw new Error('Unable to load your service profile')
           }
 
-          setMusicians([])
-          setPerformanceRequests([])
-          setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
-          return
+          if (!shouldLoadRequesterData) {
+            setMusicians([])
+            setPerformanceRequests([])
+            setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
+            return
+          }
         }
 
-        const [musiciansResponse, requestResponse] = responses.slice(1)
+        const [musiciansResponse, requestResponse] = shouldLoadProfile ? responses.slice(3) : responses.slice(1)
 
         if (requestResponse.status === 401) {
           setPerformanceRequests([])
@@ -428,7 +443,7 @@ function AppShell() {
     let ignore = false
 
     async function loadSelectedProviderAvailability() {
-      if (!currentUser || !canAccessRole(currentUser.role, ['CONSUMER'])) {
+      if (!currentUser || !canAccessRole(currentUser.role, ['CONSUMER', 'ADMIN'])) {
         if (!ignore) {
           setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
           setAvailabilityMessage('')
@@ -491,6 +506,21 @@ function AppShell() {
   }, [currentUser, requestForm.musician_id])
 
   useEffect(() => {
+    if (isAuthenticating || !currentUser) {
+      return
+    }
+
+    if (currentUser.role === 'SERV-PROVIDER' && location.pathname !== '/my-profile') {
+      navigate('/my-profile', { replace: true })
+      return
+    }
+
+    if (currentUser.role === 'ADMIN' && serviceProfile && location.pathname !== '/my-profile') {
+      navigate('/my-profile', { replace: true })
+    }
+  }, [currentUser, isAuthenticating, location.pathname, navigate, serviceProfile])
+
+  useEffect(() => {
     let ignore = false
 
     async function loadPublicLandingData() {
@@ -543,6 +573,9 @@ function AppShell() {
   }, [musicians, requestForm.musician_id])
 
   const isServiceProvider = currentUser?.role === 'SERV-PROVIDER'
+  const isAdmin = currentUser?.role === 'ADMIN'
+  const showMusicianEnrollment = canEnrollMusician(currentUser?.role)
+  const showConsumerRequest = canRequestPerformance(currentUser?.role)
 
   function goTo(path) {
     navigate(path)
@@ -611,7 +644,7 @@ function AppShell() {
       setAuthForm({ email: user.email, password: '', confirmPassword: '', role: user.role })
       setAuthMessage('')
       setIsAuthModalOpen(false)
-        const redirectTo = postAuthRedirect || getDefaultRoute(user.role) || '/'
+      const redirectTo = postAuthRedirect || getDefaultRoute(user.role) || '/'
       setPostAuthRedirect('')
       navigate(redirectTo, { replace: true })
     } catch {
@@ -652,6 +685,25 @@ function AppShell() {
       musician_id: String(createdMusician.id),
     }))
     setMessage('The new musician profile is now available in the local musicians list.')
+
+    if (currentUser?.role === 'ADMIN') {
+      setServiceProfile(createdMusician)
+      setServiceProfileForm({
+        full_name: createdMusician.full_name,
+        instrument: createdMusician.instrument,
+        city: createdMusician.city,
+        state: createdMusician.state,
+        phone: createdMusician.phone,
+        bio: createdMusician.bio,
+        rate: createdMusician.rate,
+        preferred_event_type: createdMusician.preferred_event_type,
+        preferred_contact_method: createdMusician.preferred_contact_method,
+        available_weekends: createdMusician.available_weekends,
+        travel_buffer_minutes: createdMusician.travel_buffer_minutes ?? 120,
+      })
+      setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+      navigate('/my-profile', { replace: true })
+    }
   }
 
   async function handleRequestSubmit(event) {
@@ -962,17 +1014,25 @@ function AppShell() {
                   <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/my-profile">
                     My profile
                   </NavLink>
+                ) : isAdmin && serviceProfile ? (
+                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/my-profile">
+                    My profile
+                  </NavLink>
+                ) : isAdmin ? (
+                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/musicians/enroll">
+                    Enroll musician
+                  </NavLink>
                 ) : (
                   <NavLink className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')} to="/musicians">
                     Local musicians
                   </NavLink>
                 )}
-                {!isServiceProvider && canAccessRole(currentUser.role, ['SERV-PROVIDER']) ? (
+                {!isServiceProvider && !isAdmin && showMusicianEnrollment ? (
                   <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/musicians/enroll">
                     Enroll musician
                   </NavLink>
                 ) : null}
-                {canAccessRole(currentUser.role, ['CONSUMER']) ? (
+                {showConsumerRequest ? (
                   <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/request-performance">
                     Request a performance
                   </NavLink>
@@ -997,8 +1057,8 @@ function AppShell() {
                     onEnroll={() => goTo(isServiceProvider ? '/my-profile' : '/musicians/enroll')}
                     onRequest={() => goTo('/request-performance')}
                     currentUser={currentUser}
-                    canEnroll={!isServiceProvider && canAccessRole(currentUser.role, ['SERV-PROVIDER'])}
-                    canRequest={canAccessRole(currentUser.role, ['CONSUMER'])}
+                    canEnroll={!isServiceProvider && showMusicianEnrollment}
+                    canRequest={showConsumerRequest}
                   />
                 }
               />
@@ -1011,7 +1071,7 @@ function AppShell() {
                     <MusiciansPage
                       musicians={musicians}
                       onEnroll={() => goTo('/musicians/enroll')}
-                      canEnroll={canAccessRole(currentUser.role, ['SERV-PROVIDER'])}
+                      canEnroll={showMusicianEnrollment}
                       currentUser={currentUser}
                     />
                   )
@@ -1020,7 +1080,7 @@ function AppShell() {
               <Route
                 path="/my-profile"
                 element={
-                  <RouteGuard currentUser={currentUser} allowedRoles={["SERV-PROVIDER"]} redirectTo={getDefaultRoute(currentUser.role)}>
+                  <RouteGuard currentUser={currentUser} allowedRoles={["SERV-PROVIDER", "ADMIN"]} redirectTo={getDefaultRoute(currentUser.role)}>
                     <ManageServiceProfilePage
                       profileForm={serviceProfileForm}
                       setProfileForm={setServiceProfileForm}
@@ -1046,7 +1106,7 @@ function AppShell() {
                   isServiceProvider ? (
                     <Navigate to="/my-profile" replace />
                   ) : (
-                    <RouteGuard currentUser={currentUser} allowedRoles={["ADMIN"]} redirectTo={getDefaultRoute(currentUser.role)}>
+                    <RouteGuard currentUser={currentUser} allowedRoles={["SERV-PROVIDER", "ADMIN"]} redirectTo={getDefaultRoute(currentUser.role)}>
                       <EnrollMusicianPage musicianForm={musicianForm} setMusicianForm={setMusicianForm} onSubmit={handleMusicianSubmit} />
                     </RouteGuard>
                   )

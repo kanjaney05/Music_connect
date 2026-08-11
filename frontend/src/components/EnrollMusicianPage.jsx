@@ -1,10 +1,14 @@
 export default function EnrollMusicianPage({ musicianForm, setMusicianForm, onSubmit }) {
   return (
     <section className="content-grid route-page single-column-page">
-      <article className="card form-card full-span-card">
+      <article className="card form-card full-span-card profile-editor-card">
         <div className="section-head">
           <p className="eyebrow">Enrollment</p>
           <h2>Create a musician profile</h2>
+          <p className="hero-text profile-helper">
+            Admins and service providers use the same enrollment flow to create a musician profile that will appear in the local
+            musicians list.
+          </p>
         </div>
 
         <form className="stack-form" onSubmit={onSubmit}>
