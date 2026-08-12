@@ -23,7 +23,7 @@ class AuthLoginRequest(AuthUserBase):
 
 
 class AuthResetPasswordRequest(AuthUserBase):
-    pass
+    role: str = Field(min_length=4, max_length=40)
 
 
 class AuthUserRead(AuthUserPublic):

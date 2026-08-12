@@ -86,7 +86,16 @@ function formatAuthError(detail, fallbackMessage) {
 
   if (Array.isArray(detail)) {
     const messages = detail
-      .map((item) => item?.msg || item?.message || item?.detail)
+      .map((item) => {
+        const fieldName = Array.isArray(item?.loc) ? item.loc.filter((part) => typeof part === 'string').slice(-1)[0] : ''
+        const reason = item?.msg || item?.message || item?.detail
+
+        if (!reason || typeof reason !== 'string' || !reason.trim()) {
+          return ''
+        }
+
+        return fieldName ? `${fieldName}: ${reason}` : reason
+      })
       .filter((item) => typeof item === 'string' && item.trim())
 
     if (messages.length > 0) {
@@ -99,6 +108,11 @@ function formatAuthError(detail, fallbackMessage) {
   }
 
   return fallbackMessage
+}
+
+function getAuthFailureMessage(authMode, detail, fallbackMessage) {
+  const actionLabel = authMode === 'register' ? 'Registration failed' : authMode === 'reset' ? 'Password reset failed' : 'Sign-in failed'
+  return `${actionLabel}: ${formatAuthError(detail, fallbackMessage)}`
 }
 
 function RouteGuard({ currentUser, allowedRoles, redirectTo, children }) {
@@ -153,6 +167,7 @@ function AppShell() {
   const [isLoadingAvailability, setIsLoadingAvailability] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(true)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
+  const [pendingContactProvider, setPendingContactProvider] = useState(null)
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -185,6 +200,7 @@ function AppShell() {
     setIsSavingAvailability(false)
     setIsLoadingAvailability(false)
     setIsAuthModalOpen(false)
+    setPendingContactProvider(null)
   }
 
   function resetAuthForm(nextMode = authMode) {
@@ -212,6 +228,14 @@ function AppShell() {
 
   function closeAuthModal() {
     setIsAuthModalOpen(false)
+  }
+
+  function buildProviderContactLink(provider) {
+    const subject = encodeURIComponent(`Music Connect inquiry for ${provider.full_name || 'your services'}`)
+    const body = encodeURIComponent(
+      `Hello ${provider.full_name || 'there'},\n\nI found your profile on Music Connect and would like to ask about your services for an upcoming event.\n\nBest regards,`,
+    )
+    return `mailto:${provider.email}?subject=${subject}&body=${body}`
   }
 
   useEffect(() => {
@@ -521,6 +545,21 @@ function AppShell() {
   }, [currentUser, isAuthenticating, location.pathname, navigate, serviceProfile])
 
   useEffect(() => {
+    if (!currentUser || !pendingContactProvider) {
+      return
+    }
+
+    if (currentUser.role !== 'CONSUMER') {
+      setMessage('Only consumers can email service providers from the profile cards.')
+      setPendingContactProvider(null)
+      return
+    }
+
+    window.location.href = buildProviderContactLink(pendingContactProvider)
+    setPendingContactProvider(null)
+  }, [currentUser, pendingContactProvider])
+
+  useEffect(() => {
     let ignore = false
 
     async function loadPublicLandingData() {
@@ -581,6 +620,27 @@ function AppShell() {
     navigate(path)
   }
 
+  function handleContactProvider(provider) {
+    if (!provider?.email) {
+      setMessage('This provider does not have an email address listed.')
+      return
+    }
+
+    if (!currentUser) {
+      setPendingContactProvider(provider)
+      openAuthModal('login', location.pathname)
+      setAuthMessage('Please sign in as a consumer to email this service provider.')
+      return
+    }
+
+    if (currentUser.role !== 'CONSUMER') {
+      setMessage('Only consumers can email service providers from the profile cards.')
+      return
+    }
+
+    window.location.href = buildProviderContactLink(provider)
+  }
+
   async function handleAuthSubmit(event) {
     event.preventDefault()
     setAuthMessage('')
@@ -591,6 +651,12 @@ function AppShell() {
 
     if (!email) {
       setAuthMessage('Email address is required.')
+      setIsLoading(false)
+      return
+    }
+
+    if (authMode === 'register' && authForm.confirmPassword.trim() !== password) {
+      setAuthMessage('Registration failed: Passwords do not match. Please enter the same password in both fields.')
       setIsLoading(false)
       return
     }
@@ -618,14 +684,22 @@ function AppShell() {
         body: JSON.stringify({
           email,
           password,
-          ...(isRegisterMode ? { role: authForm.role } : {}),
+          ...(isRegisterMode || isResetMode ? { role: authForm.role } : {}),
         }),
       })
 
       const payload = await response.json().catch(() => null)
 
       if (!response.ok) {
-        setAuthMessage(formatAuthError(payload?.detail, isResetMode ? 'Password reset failed. Check the email address and try again.' : 'Could not open this account.'))
+        setAuthMessage(
+          getAuthFailureMessage(
+            authMode,
+            payload?.detail,
+            isResetMode
+              ? 'Check the email address and selected profile type, then try again.'
+              : 'Check the email, password, and selected role, then try again.',
+          ),
+        )
         return
       }
 
@@ -969,9 +1043,10 @@ function AppShell() {
               isLoading={publicLoading}
               currentUser={null}
               canEnroll={false}
-                  canRequest={false}
-                  onRequest={() => openAuthModal('login', '/request-performance')}
+              canRequest={false}
+              onRequest={() => openAuthModal('login', '/request-performance')}
               publicServiceProviders={publicServiceProviders}
+              onContactProvider={handleContactProvider}
               isLanding
             />
           </main>
@@ -1059,6 +1134,8 @@ function AppShell() {
                     currentUser={currentUser}
                     canEnroll={!isServiceProvider && showMusicianEnrollment}
                     canRequest={showConsumerRequest}
+                    onContactProvider={handleContactProvider}
+                    publicServiceProviders={publicServiceProviders}
                   />
                 }
               />
@@ -1073,6 +1150,7 @@ function AppShell() {
                       onEnroll={() => goTo('/musicians/enroll')}
                       canEnroll={showMusicianEnrollment}
                       currentUser={currentUser}
+                      onContactProvider={handleContactProvider}
                     />
                   )
                 }

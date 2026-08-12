@@ -26,4 +26,4 @@ npm run dev
 The frontend runs on `http://localhost:5173` and proxies `/api` requests to the backend on `http://localhost:8000`.
 
 ADMIN Username: kanjaney05@gmail.com
-ADMIN Password: 
+ADMIN Password: MusicAdmin

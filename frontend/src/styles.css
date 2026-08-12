@@ -795,6 +795,17 @@ label {
   font-size: 0.92rem;
 }
 
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.contact-button {
+  width: fit-content;
+}
+
 .event-topline {
   display: flex;
   align-items: start;

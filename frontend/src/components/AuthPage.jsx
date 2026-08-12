@@ -29,7 +29,7 @@ export default function AuthPage({
         </h1>
         <p className="hero-text">
           {isResetMode
-            ? 'Enter your email and choose a new password to update your account.'
+            ? 'Enter your email, select your profile type, and choose a new password to update your account.'
             : `Email is the username. Password is required. During registration, choose a role, and the admin email ${adminEmail} is always treated as ADMIN.`}
         </p>
       </div>
@@ -75,7 +75,41 @@ export default function AuthPage({
             />
           </label>
 
+          {authMode === 'register' ? (
+            <label>
+              Confirm password
+              <input
+                type="password"
+                value={authForm.confirmPassword || ''}
+                onChange={(event) => setAuthForm({ ...authForm, confirmPassword: event.target.value })}
+                placeholder="Repeat your password"
+                required
+              />
+            </label>
+          ) : null}
+
           {isResetMode ? (
+            <>
+              <label>
+                Profile type
+                <select value={authForm.role} onChange={(event) => setAuthForm({ ...authForm, role: event.target.value })}>
+                  {authRoles.map((role) => (
+                    <option key={role.value} value={role.value}>
+                      {role.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="auth-role-hint">
+                {authRoles.map((role) => (
+                  <p key={role.value}>
+                    <strong>{role.label}</strong>
+                    <span>{role.description}</span>
+                  </p>
+                ))}
+              </div>
+
             <label>
               Confirm new password
               <input
@@ -86,9 +120,10 @@ export default function AuthPage({
                 required
               />
               <span className="auth-reset-note">
-                Common reset errors: unknown email, passwords that do not match, or a new password shorter than 8 characters.
+                Common reset errors: unknown email, profile type mismatch, passwords that do not match, or a new password shorter than 8 characters.
               </span>
             </label>
+            </>
           ) : null}
 
           {authMode === 'register' ? (

@@ -501,10 +501,27 @@ def login_user(payload: AuthLoginRequest, db: Session = Depends(get_db)) -> Auth
 @app.post("/api/auth/reset-password", response_model=ApiMessage)
 def reset_password(payload: AuthResetPasswordRequest, db: Session = Depends(get_db)) -> ApiMessage:
     normalized_email = normalize_email(payload.email)
+    requested_role = payload.role.upper()
+
+    if requested_role not in ALLOWED_ROLES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported role")
+
+    if normalized_email == ADMIN_EMAIL and requested_role != "ADMIN":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin email must use ADMIN profile type")
+
+    if normalized_email != ADMIN_EMAIL and requested_role == "ADMIN":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only the admin email can reset an ADMIN account")
+
     user = get_user_by_email(db, normalized_email)
 
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown user")
+
+    if user.role != requested_role:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Account role mismatch. This email is registered as {user.role}.",
+        )
 
     user.password_hash = hash_password(payload.password)
     db.commit()

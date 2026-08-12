@@ -7,8 +7,11 @@ export default function HomePage({
   canEnroll,
   canRequest,
   publicServiceProviders = [],
+  onContactProvider,
   isLanding = false,
 }) {
+  const isConsumer = currentUser?.role === 'CONSUMER'
+
   if (!isLanding) {
     return (
       <section className="hero card section-anchor">
@@ -146,6 +149,16 @@ export default function HomePage({
                 <div className="card-meta">
                   <span>Preferred event: {provider.preferred_event_type || 'Any event'}</span>
                   <span>Requests by {provider.preferred_contact_method === 'phone' ? 'phone' : 'email'}</span>
+                </div>
+                <div className="profile-actions">
+                  <button
+                    className="button secondary slim-button contact-button"
+                    type="button"
+                    disabled={Boolean(currentUser) && !isConsumer}
+                    onClick={() => onContactProvider?.(provider)}
+                  >
+                    {isConsumer ? 'Email provider' : currentUser ? 'Consumers only' : 'Sign in to email'}
+                  </button>
                 </div>
               </article>
             ))

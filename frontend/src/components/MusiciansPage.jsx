@@ -1,4 +1,4 @@
-export default function MusiciansPage({ musicians, onEnroll, canEnroll, currentUser }) {
+export default function MusiciansPage({ musicians, onEnroll, canEnroll, currentUser, onContactProvider }) {
   const isConsumerView = currentUser?.role === 'CONSUMER'
 
   return (
@@ -36,6 +36,16 @@ export default function MusiciansPage({ musicians, onEnroll, canEnroll, currentU
               <div className="card-meta">
                 <span>{musician.rate}</span>
                 <span>{musician.available_weekends ? 'Weekend availability' : 'Weekday-only'}</span>
+              </div>
+              <div className="profile-actions">
+                <button
+                  className="button secondary slim-button contact-button"
+                  type="button"
+                  disabled={Boolean(currentUser) && !isConsumerView}
+                  onClick={() => onContactProvider?.(musician)}
+                >
+                  {isConsumerView ? 'Email provider' : currentUser ? 'Consumers only' : 'Sign in to email'}
+                </button>
               </div>
             </article>
           ))}
