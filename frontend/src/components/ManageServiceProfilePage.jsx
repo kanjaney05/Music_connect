@@ -12,9 +12,16 @@ export default function ManageServiceProfilePage({
   availabilityMessage,
   availabilityCalendar,
   preferredEventTypes = [],
+  canManageAvailability = false,
+  serviceProfiles = [],
+  selectedServiceProfileId = '',
+  onSelectServiceProfile,
+  onCreateNewProfile,
+  onDeleteServiceProfile,
   onCreateAvailabilitySlot,
   onUpdateAvailabilitySlot,
   onDeleteAvailabilitySlot,
+  formatProviderLocation,
 }) {
   const [slotForm, setSlotForm] = useState({
     date: '',
@@ -32,6 +39,11 @@ export default function ManageServiceProfilePage({
   const slotCount = useMemo(
     () => daysWithSlots.reduce((total, day) => total + day.slots.length, 0),
     [daysWithSlots],
+  )
+
+  const selectedProfile = useMemo(
+    () => serviceProfiles.find((profile) => String(profile.id) === String(selectedServiceProfileId)) || null,
+    [serviceProfiles, selectedServiceProfileId],
   )
 
   function formatDayLabel(day) {
@@ -115,11 +127,39 @@ export default function ManageServiceProfilePage({
       <article className="card form-card full-span-card profile-editor-card">
         <div className="section-head">
           <p className="eyebrow">My profile</p>
-          <h2>{hasProfile ? 'Edit your service provider profile' : 'Create your service provider profile'}</h2>
+          <h2>{hasProfile ? 'Edit your profile' : 'Create your profile'}</h2>
           <p className="hero-text profile-helper">
-            Your profile is tied to <strong>{currentUser.email}</strong>. You can update your own details here, but you will not
-            see other service providers while signed in as a service provider.
+            Your profiles are tied to <strong>{currentUser.email}</strong>. You can switch between them, create another one,
+            or remove one you no longer need.
           </p>
+        </div>
+
+        <div className="profile-selector-row">
+          <label>
+            Select profile
+            <select
+              value={selectedServiceProfileId}
+              onChange={(event) => onSelectServiceProfile?.(event.target.value)}
+            >
+              <option value="">Create a new profile</option>
+              {serviceProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.full_name} - {profile.instrument}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="profile-selector-actions">
+            <button className="chip" type="button" onClick={() => onCreateNewProfile?.()}>
+              New profile
+            </button>
+            {selectedProfile ? (
+              <button className="chip danger" type="button" onClick={() => onDeleteServiceProfile?.(selectedProfile.id)}>
+                Delete profile
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <form className="stack-form" onSubmit={onSubmit}>
@@ -150,8 +190,8 @@ export default function ManageServiceProfilePage({
               <input
                 value={profileForm.city}
                 onChange={(event) => setProfileForm({ ...profileForm, city: event.target.value })}
-                placeholder="Your city"
-                required
+                placeholder="Auto-filled from zip code"
+                readOnly
               />
             </label>
             <label>
@@ -159,10 +199,28 @@ export default function ManageServiceProfilePage({
               <input
                 value={profileForm.state}
                 onChange={(event) => setProfileForm({ ...profileForm, state: event.target.value })}
-                placeholder="Your state"
+                placeholder="Auto-filled from zip code"
+                readOnly
+              />
+            </label>
+          </div>
+
+          <div className="field-grid">
+            <label>
+              Zip code
+              <input
+                value={profileForm.zip_code || ''}
+                onChange={(event) => setProfileForm({ ...profileForm, zip_code: event.target.value })}
+                placeholder="12345"
+                inputMode="numeric"
+                autoComplete="postal-code"
                 required
               />
             </label>
+            <div className="field-hint location-preview">
+              <span>Detected location</span>
+              <strong>{typeof formatProviderLocation === 'function' ? formatProviderLocation(profileForm) : 'Add a zip code to preview the city and state.'}</strong>
+            </div>
           </div>
 
           <div className="field-grid">
@@ -253,142 +311,144 @@ export default function ManageServiceProfilePage({
           </label>
 
           <button className="button primary" type="submit" disabled={isSaving}>
-            {isSaving ? 'Saving…' : hasProfile ? 'Save profile changes' : 'Create profile'}
+            {isSaving ? 'Saving…' : selectedProfile ? 'Save profile changes' : 'Create profile'}
           </button>
         </form>
 
         {message ? <p className="message-banner auth-message">{message}</p> : null}
 
-        <div className="availability-editor">
-          <div className="section-head compact">
-            <p className="eyebrow">Availability calendar</p>
-            <h2>Publish your next 30 days of time slots</h2>
-          </div>
-          <p className="hero-text availability-helper">
-            Customers will see these slots by day in a calendar. Your current minimum gap between bookings is{' '}
-            <strong>{profileForm.travel_buffer_minutes} minutes</strong>.
-          </p>
-          <p className="role-chip-inline">Time zone: {availabilityCalendar?.timezone_label || 'Local time'}</p>
-
-          <form className="stack-form" onSubmit={handleSlotSubmit}>
-            <div className="field-grid availability-grid">
-              <label>
-                Date
-                <input
-                  type="date"
-                  value={slotForm.date}
-                  onChange={(event) => setSlotForm({ ...slotForm, date: event.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                Start time
-                <input
-                  type="time"
-                  value={slotForm.start_time}
-                  onChange={(event) => setSlotForm({ ...slotForm, start_time: event.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                End time
-                <input
-                  type="time"
-                  value={slotForm.end_time}
-                  onChange={(event) => setSlotForm({ ...slotForm, end_time: event.target.value })}
-                  required
-                />
-              </label>
+        {canManageAvailability ? (
+          <div className="availability-editor">
+            <div className="section-head compact">
+              <p className="eyebrow">Availability calendar</p>
+              <h2>Publish your next 30 days of time slots</h2>
             </div>
+            <p className="hero-text availability-helper">
+              Customers will see these slots by day in a calendar. Your current minimum gap between bookings is{' '}
+              <strong>{profileForm.travel_buffer_minutes} minutes</strong>.
+            </p>
+            <p className="role-chip-inline">Time zone: {availabilityCalendar?.timezone_label || 'Local time'}</p>
 
-            <button className="button secondary" type="submit" disabled={isSavingAvailability}>
-              {isSavingAvailability ? 'Saving slot…' : 'Add availability slot'}
-            </button>
-          </form>
+            <form className="stack-form" onSubmit={handleSlotSubmit}>
+              <div className="field-grid availability-grid">
+                <label>
+                  Date
+                  <input
+                    type="date"
+                    value={slotForm.date}
+                    onChange={(event) => setSlotForm({ ...slotForm, date: event.target.value })}
+                    required
+                  />
+                </label>
+                <label>
+                  Start time
+                  <input
+                    type="time"
+                    value={slotForm.start_time}
+                    onChange={(event) => setSlotForm({ ...slotForm, start_time: event.target.value })}
+                    required
+                  />
+                </label>
+                <label>
+                  End time
+                  <input
+                    type="time"
+                    value={slotForm.end_time}
+                    onChange={(event) => setSlotForm({ ...slotForm, end_time: event.target.value })}
+                    required
+                  />
+                </label>
+              </div>
 
-          {slotFormMessage ? <p className="message-banner auth-message">{slotFormMessage}</p> : null}
-          {availabilityMessage ? <p className="message-banner auth-message">{availabilityMessage}</p> : null}
+              <button className="button secondary" type="submit" disabled={isSavingAvailability}>
+                {isSavingAvailability ? 'Saving slot…' : 'Add availability slot'}
+              </button>
+            </form>
 
-          <div className="availability-list card-list">
-            {daysWithSlots.length > 0 ? (
-              daysWithSlots.map((day) => (
-                <article className="card availability-day-card" key={day.date}>
-                  <div className="section-head compact availability-day-head">
-                    <h3>{formatDayLabel(day.date)}</h3>
-                    <span className="status-pill">{day.slots.length} slot(s)</span>
-                  </div>
-                  <div className="availability-slot-list">
-                    {day.slots.map((slot) => {
-                      const isEditing = editingSlot?.id === slot.id
+            {slotFormMessage ? <p className="message-banner auth-message">{slotFormMessage}</p> : null}
+            {availabilityMessage ? <p className="message-banner auth-message">{availabilityMessage}</p> : null}
 
-                      return (
-                        <div className="availability-slot-row" key={slot.id}>
-                          {isEditing ? (
-                            <form className="availability-edit-form" onSubmit={saveEditSlot}>
-                              <input
-                                type="date"
-                                value={editingSlot.date}
-                                onChange={(event) => setEditingSlot({ ...editingSlot, date: event.target.value })}
-                                required
-                              />
-                              <input
-                                type="time"
-                                value={editingSlot.start_time}
-                                onChange={(event) => setEditingSlot({ ...editingSlot, start_time: event.target.value })}
-                                required
-                              />
-                              <input
-                                type="time"
-                                value={editingSlot.end_time}
-                                onChange={(event) => setEditingSlot({ ...editingSlot, end_time: event.target.value })}
-                                required
-                              />
-                              <button className="chip" type="submit" disabled={isSavingAvailability}>
-                                Save
-                              </button>
-                              <button className="chip" type="button" onClick={() => setEditingSlot(null)} disabled={isSavingAvailability}>
-                                Cancel
-                              </button>
-                            </form>
-                          ) : (
-                            <>
-                              <p>
-                                {formatSlotTime(slot.starts_at)} to {formatSlotTime(slot.ends_at)}
-                              </p>
-                              <div className="availability-slot-actions">
-                                {slot.is_reserved ? <span className="status-pill">Reserved</span> : null}
-                                <button
-                                  className="chip"
-                                  type="button"
-                                  onClick={() => beginEditSlot(slot)}
-                                  disabled={isSavingAvailability || slot.is_reserved}
-                                >
-                                  Edit
+            <div className="availability-list card-list">
+              {daysWithSlots.length > 0 ? (
+                daysWithSlots.map((day) => (
+                  <article className="card availability-day-card" key={day.date}>
+                    <div className="section-head compact availability-day-head">
+                      <h3>{formatDayLabel(day.date)}</h3>
+                      <span className="status-pill">{day.slots.length} slot(s)</span>
+                    </div>
+                    <div className="availability-slot-list">
+                      {day.slots.map((slot) => {
+                        const isEditing = editingSlot?.id === slot.id
+
+                        return (
+                          <div className="availability-slot-row" key={slot.id}>
+                            {isEditing ? (
+                              <form className="availability-edit-form" onSubmit={saveEditSlot}>
+                                <input
+                                  type="date"
+                                  value={editingSlot.date}
+                                  onChange={(event) => setEditingSlot({ ...editingSlot, date: event.target.value })}
+                                  required
+                                />
+                                <input
+                                  type="time"
+                                  value={editingSlot.start_time}
+                                  onChange={(event) => setEditingSlot({ ...editingSlot, start_time: event.target.value })}
+                                  required
+                                />
+                                <input
+                                  type="time"
+                                  value={editingSlot.end_time}
+                                  onChange={(event) => setEditingSlot({ ...editingSlot, end_time: event.target.value })}
+                                  required
+                                />
+                                <button className="chip" type="submit" disabled={isSavingAvailability}>
+                                  Save
                                 </button>
-                                <button
-                                  className="chip"
-                                  type="button"
-                                  onClick={() => onDeleteAvailabilitySlot(slot.id)}
-                                  disabled={isSavingAvailability || slot.is_reserved}
-                                >
-                                  Remove
+                                <button className="chip" type="button" onClick={() => setEditingSlot(null)} disabled={isSavingAvailability}>
+                                  Cancel
                                 </button>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
+                              </form>
+                            ) : (
+                              <>
+                                <p>
+                                  {formatSlotTime(slot.starts_at)} to {formatSlotTime(slot.ends_at)}
+                                </p>
+                                <div className="availability-slot-actions">
+                                  {slot.is_reserved ? <span className="status-pill">Reserved</span> : null}
+                                  <button
+                                    className="chip"
+                                    type="button"
+                                    onClick={() => beginEditSlot(slot)}
+                                    disabled={isSavingAvailability || slot.is_reserved}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    className="chip"
+                                    type="button"
+                                    onClick={() => onDeleteAvailabilitySlot(slot.id)}
+                                    disabled={isSavingAvailability || slot.is_reserved}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <article className="loading-state public-empty-state">
+                  {slotCount === 0 ? 'No slots published yet for the next 30 days.' : 'No slots available.'}
                 </article>
-              ))
-            ) : (
-              <article className="loading-state public-empty-state">
-                {slotCount === 0 ? 'No slots published yet for the next 30 days.' : 'No slots available.'}
-              </article>
-            )}
+              )}
+            </div>
           </div>
-        </div>
+        ) : null}
       </article>
     </section>
   )

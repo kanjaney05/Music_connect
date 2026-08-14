@@ -39,8 +39,8 @@ export default function EnrollMusicianPage({ musicianForm, setMusicianForm, onSu
               <input
                 value={musicianForm.city}
                 onChange={(event) => setMusicianForm({ ...musicianForm, city: event.target.value })}
-                placeholder="Your city"
-                required
+                placeholder="Auto-filled from zip code"
+                readOnly
               />
             </label>
             <label>
@@ -48,7 +48,21 @@ export default function EnrollMusicianPage({ musicianForm, setMusicianForm, onSu
               <input
                 value={musicianForm.state}
                 onChange={(event) => setMusicianForm({ ...musicianForm, state: event.target.value })}
-                placeholder="Your state"
+                placeholder="Auto-filled from zip code"
+                readOnly
+              />
+            </label>
+          </div>
+
+          <div className="field-grid">
+            <label>
+              Zip code
+              <input
+                value={musicianForm.zip_code || ''}
+                onChange={(event) => setMusicianForm({ ...musicianForm, zip_code: event.target.value })}
+                placeholder="12345"
+                inputMode="numeric"
+                autoComplete="postal-code"
                 required
               />
             </label>

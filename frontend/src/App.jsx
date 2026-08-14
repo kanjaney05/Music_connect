@@ -1,20 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 
-import { AuthPage, EnrollMusicianPage, HomePage, ManageServiceProfilePage, MusiciansPage, RequestPerformancePage } from './components'
+import {
+  AdminIssuesPage,
+  AuthPage,
+  ContactAdminPage,
+  HomePage,
+  ManageServiceProfilePage,
+  MusiciansPage,
+  RequestPerformancePage,
+} from './components'
 
 const ADMIN_EMAIL = 'kanjaney05@gmail.com'
 const AUTH_STORAGE_KEY = 'music-connect-auth-user'
-
-const emptyMusicianForm = {
-  full_name: '',
-  instrument: 'Piano',
-  city: '',
-  state: '',
-  phone: '',
-  email: '',
-  available_weekends: true,
-}
+const SELECTED_PROFILE_STORAGE_KEY = 'music-connect-selected-service-profile-id'
 
 const emptyRequestForm = {
   event_type: 'Community celebration',
@@ -24,9 +23,15 @@ const emptyRequestForm = {
   notes: '',
 }
 
+const emptySupportIssueForm = {
+  subject: '',
+  message: '',
+}
+
 const emptyServiceProfileForm = {
   full_name: '',
   instrument: 'Piano',
+  zip_code: '',
   city: '',
   state: '',
   phone: '',
@@ -50,18 +55,30 @@ const emptyAvailabilityCalendar = {
 }
 
 const eventTypes = ['Community celebration', 'Birthday', 'Wedding', 'Fundraiser', 'School concert', 'Other event']
-const protectedRoles = {
-  musicians: ['SERV-PROVIDER'],
-  requests: ['CONSUMER', 'ADMIN'],
+function buildServiceProfileForm(profile) {
+  if (!profile) {
+    return emptyServiceProfileForm
+  }
+
+  return {
+    full_name: profile.full_name,
+    instrument: profile.instrument,
+    zip_code: profile.zip_code || '',
+    city: profile.city,
+    state: profile.state,
+    phone: profile.phone,
+    bio: profile.bio || emptyServiceProfileForm.bio,
+    rate: profile.rate || emptyServiceProfileForm.rate,
+    preferred_event_type: profile.preferred_event_type || emptyServiceProfileForm.preferred_event_type,
+    preferred_contact_method: profile.preferred_contact_method || emptyServiceProfileForm.preferred_contact_method,
+    available_weekends: profile.available_weekends,
+    travel_buffer_minutes: profile.travel_buffer_minutes ?? 120,
+  }
 }
 
 function getDefaultRoute(role) {
-  if (role === 'SERV-PROVIDER') {
+  if (role) {
     return '/my-profile'
-  }
-
-  if (role === 'CONSUMER') {
-    return '/'
   }
 
   return '/'
@@ -69,10 +86,6 @@ function getDefaultRoute(role) {
 
 function canAccessRole(role, allowedRoles) {
   return role === 'ADMIN' || allowedRoles.includes(role)
-}
-
-function canEnrollMusician(role) {
-  return role === 'SERV-PROVIDER' || role === 'ADMIN'
 }
 
 function canRequestPerformance(role) {
@@ -148,22 +161,27 @@ function AppShell() {
   const [dashboard, setDashboard] = useState(null)
   const [musicians, setMusicians] = useState([])
   const [performanceRequests, setPerformanceRequests] = useState([])
+  const [serviceProfiles, setServiceProfiles] = useState([])
+  const [selectedServiceProfileId, setSelectedServiceProfileId] = useState('')
   const [serviceProfile, setServiceProfile] = useState(null)
   const [serviceProfileForm, setServiceProfileForm] = useState(emptyServiceProfileForm)
   const [providerAvailabilityCalendar, setProviderAvailabilityCalendar] = useState(emptyAvailabilityCalendar)
   const [customerAvailabilityCalendar, setCustomerAvailabilityCalendar] = useState(emptyAvailabilityCalendar)
   const [publicServiceProviders, setPublicServiceProviders] = useState([])
   const [publicLoading, setPublicLoading] = useState(true)
-  const [musicianForm, setMusicianForm] = useState(emptyMusicianForm)
   const [requestForm, setRequestForm] = useState(emptyRequestForm)
+  const [supportIssues, setSupportIssues] = useState([])
+  const [supportIssueForm, setSupportIssueForm] = useState(emptySupportIssueForm)
   const [message, setMessage] = useState('')
   const [authMessage, setAuthMessage] = useState('')
   const [profileMessage, setProfileMessage] = useState('')
   const [availabilityMessage, setAvailabilityMessage] = useState('')
+  const [supportMessage, setSupportMessage] = useState('')
   const [postAuthRedirect, setPostAuthRedirect] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isSavingProfile, setIsSavingProfile] = useState(false)
   const [isSavingAvailability, setIsSavingAvailability] = useState(false)
+  const [isSavingSupportIssue, setIsSavingSupportIssue] = useState(false)
   const [isLoadingAvailability, setIsLoadingAvailability] = useState(false)
   const [isAuthenticating, setIsAuthenticating] = useState(true)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
@@ -182,22 +200,28 @@ function AppShell() {
     setDashboard(null)
     setMusicians([])
     setPerformanceRequests([])
+    setServiceProfiles([])
+    setSelectedServiceProfileId('')
     setServiceProfile(null)
     setServiceProfileForm(emptyServiceProfileForm)
     setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
     setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
     setPublicServiceProviders([])
-    setMusicianForm(emptyMusicianForm)
     setRequestForm(emptyRequestForm)
+    setSupportIssues([])
+    setSupportIssueForm(emptySupportIssueForm)
     setMessage('')
     setAuthMessage(nextMessage)
     setProfileMessage('')
     setAvailabilityMessage('')
+    setSupportMessage('')
     setPostAuthRedirect('')
+    localStorage.removeItem(SELECTED_PROFILE_STORAGE_KEY)
     setIsLoading(false)
     setPublicLoading(true)
     setIsSavingProfile(false)
     setIsSavingAvailability(false)
+    setIsSavingSupportIssue(false)
     setIsLoadingAvailability(false)
     setIsAuthModalOpen(false)
     setPendingContactProvider(null)
@@ -236,6 +260,163 @@ function AppShell() {
       `Hello ${provider.full_name || 'there'},\n\nI found your profile on Music Connect and would like to ask about your services for an upcoming event.\n\nBest regards,`,
     )
     return `mailto:${provider.email}?subject=${subject}&body=${body}`
+  }
+
+  function formatProviderLocation(provider) {
+    const locationParts = [provider?.city, provider?.state].filter((part) => typeof part === 'string' && part.trim())
+    const location = locationParts.join(', ')
+    const zipCode = typeof provider?.zip_code === 'string' && provider.zip_code.trim() ? provider.zip_code.trim() : ''
+
+    if (location && zipCode) {
+      return `${location} · ${zipCode}`
+    }
+
+    return location || zipCode || 'Location not listed'
+  }
+
+  async function resolveZipLocation(zipCode) {
+    const digits = (zipCode || '').replace(/\D/g, '')
+    if (digits.length < 5) {
+      return null
+    }
+
+    const normalizedZip = digits.slice(0, 5)
+    const response = await fetch(`/api/zip-lookup/${normalizedZip}`)
+    if (!response.ok) {
+      return null
+    }
+
+    const location = await response.json()
+    return {
+      zip_code: normalizedZip,
+      city: location.city || '',
+      state: location.state || '',
+    }
+  }
+
+  function setActiveServiceProfile(profile) {
+    if (!profile) {
+      setSelectedServiceProfileId('')
+      setServiceProfile(null)
+      setServiceProfileForm(emptyServiceProfileForm)
+      setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+      localStorage.removeItem(SELECTED_PROFILE_STORAGE_KEY)
+      return
+    }
+
+    setSelectedServiceProfileId(String(profile.id))
+    setServiceProfile(profile)
+    setServiceProfileForm(buildServiceProfileForm(profile))
+    localStorage.setItem(SELECTED_PROFILE_STORAGE_KEY, String(profile.id))
+  }
+
+  async function handleSelectServiceProfile(nextProfileId) {
+    if (!nextProfileId) {
+      setActiveServiceProfile(null)
+      setProfileMessage('Create a new profile below to add another account.')
+      return
+    }
+
+    const nextProfile = serviceProfiles.find((profile) => String(profile.id) === String(nextProfileId))
+    if (!nextProfile) {
+      setProfileMessage('That profile is no longer available.')
+      return
+    }
+
+    setActiveServiceProfile(nextProfile)
+    setProfileMessage('')
+
+    if (canManageAvailability) {
+      await refreshServiceProfileCalendar(nextProfile.id, serviceProfiles)
+    }
+  }
+
+  async function handleDeleteServiceProfile(profileId) {
+    if (!profileId) {
+      return
+    }
+
+    const selectedProfile = serviceProfiles.find((profile) => String(profile.id) === String(profileId))
+    if (!selectedProfile) {
+      setProfileMessage('That profile is no longer available.')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Delete the profile for ${selectedProfile.full_name}? This also removes its availability and related performance requests.`,
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setProfileMessage('')
+    const response = await fetch(`/api/service-profiles/me/${selectedProfile.id}`, {
+      method: 'DELETE',
+      headers: {
+        ...getAuthHeaders(),
+      },
+    })
+
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) {
+      setProfileMessage(formatAuthError(payload?.detail, 'Could not delete the selected profile.'))
+      return
+    }
+
+    const remainingProfiles = serviceProfiles.filter((profile) => String(profile.id) !== String(selectedProfile.id))
+    setServiceProfiles(remainingProfiles)
+
+    const nextProfile = remainingProfiles[0] || null
+    setActiveServiceProfile(nextProfile)
+    if (nextProfile && canManageAvailability) {
+      await refreshServiceProfileCalendar(nextProfile.id, remainingProfiles)
+    }
+    setProfileMessage(payload?.message || 'Service profile deleted.')
+  }
+
+  async function refreshServiceProfileCalendar(profileId, profiles = serviceProfiles) {
+    if (!profileId || !canManageAvailability) {
+      setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+      return
+    }
+
+    const selectedProfile = profiles.find((profile) => String(profile.id) === String(profileId))
+    if (!selectedProfile) {
+      setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+      return
+    }
+
+    const calendarResponse = await fetch(`/api/service-profiles/me/${selectedProfile.id}/availability-calendar?days=30`, {
+      headers: getAuthHeaders(),
+    })
+
+    if (!calendarResponse.ok) {
+      setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+      return
+    }
+
+    const calendarData = await calendarResponse.json()
+    setProviderAvailabilityCalendar(calendarData)
+  }
+
+  async function refreshSupportIssues() {
+    if (!currentUser) {
+      setSupportIssues([])
+      return
+    }
+
+    const endpoint = currentUser.role === 'ADMIN' ? '/api/support-issues' : '/api/support-issues/me'
+    const response = await fetch(endpoint, {
+      headers: getAuthHeaders(),
+    })
+
+    if (!response.ok) {
+      setSupportIssues([])
+      return
+    }
+
+    const issues = await response.json()
+    setSupportIssues(issues)
   }
 
   useEffect(() => {
@@ -321,24 +502,20 @@ function AppShell() {
 
       const isServiceProviderRole = currentUser.role === 'SERV-PROVIDER'
       const isAdminRole = currentUser.role === 'ADMIN'
-      const shouldLoadProfile = isServiceProviderRole || isAdminRole
+      const canManageAvailability = isServiceProviderRole || isAdminRole
       const shouldLoadRequesterData = currentUser.role === 'CONSUMER' || isAdminRole
+      const supportIssuesEndpoint = isAdminRole ? '/api/support-issues' : '/api/support-issues/me'
 
       try {
-        const requests = [fetch('/api/dashboard', { headers: getAuthHeaders() })]
-
-        if (shouldLoadProfile) {
-          requests.push(
-            fetch('/api/service-profile/me', { headers: getAuthHeaders() }),
-            fetch('/api/service-profile/me/availability-calendar?days=30', { headers: getAuthHeaders() }),
-          )
-        }
+        const requests = [
+          fetch('/api/dashboard', { headers: getAuthHeaders() }),
+          fetch('/api/service-profiles/me', { headers: getAuthHeaders() }),
+          fetch(supportIssuesEndpoint, { headers: getAuthHeaders() }),
+          fetch('/api/public/service-providers'),
+        ]
 
         if (shouldLoadRequesterData) {
-          requests.push(
-            fetch('/api/public/service-providers'),
-            fetch('/api/performance-requests', { headers: getAuthHeaders() }),
-          )
+          requests.push(fetch('/api/performance-requests', { headers: getAuthHeaders() }))
         }
 
         const responses = await Promise.all(requests)
@@ -365,52 +542,64 @@ function AppShell() {
         const dashboardData = await dashboardResponse.json()
         setDashboard(dashboardData)
 
-        if (shouldLoadProfile) {
-          const profileResponse = responses[1]
-          const availabilityResponse = responses[2]
-          if (profileResponse.status === 404) {
-            setServiceProfile(null)
-            setServiceProfileForm(emptyServiceProfileForm)
-            setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
-            setProfileMessage('No profile exists yet. Create your profile to get started.')
-          } else if (profileResponse.ok) {
-            const profileData = await profileResponse.json()
-            setServiceProfile(profileData)
-            setServiceProfileForm({
-              full_name: profileData.full_name,
-              instrument: profileData.instrument,
-              city: profileData.city,
-              state: profileData.state,
-              phone: profileData.phone,
-              bio: profileData.bio || emptyServiceProfileForm.bio,
-              rate: profileData.rate || emptyServiceProfileForm.rate,
-              preferred_event_type: profileData.preferred_event_type || emptyServiceProfileForm.preferred_event_type,
-              preferred_contact_method:
-                profileData.preferred_contact_method || emptyServiceProfileForm.preferred_contact_method,
-              available_weekends: profileData.available_weekends,
-              travel_buffer_minutes: profileData.travel_buffer_minutes ?? 120,
-            })
+        const profileResponse = responses[1]
+        const supportIssuesResponse = responses[2]
+  const publicServiceProvidersResponse = responses[3]
+        let loadedProfiles = []
+
+        if (profileResponse.ok) {
+          loadedProfiles = await profileResponse.json()
+          setServiceProfiles(loadedProfiles)
+
+          const storedProfileId = localStorage.getItem(SELECTED_PROFILE_STORAGE_KEY)
+          const selectedProfile =
+            loadedProfiles.find((profile) => String(profile.id) === String(storedProfileId)) || loadedProfiles[0] || null
+
+          setActiveServiceProfile(selectedProfile)
+          if (selectedProfile) {
             setProfileMessage('')
-
-            if (availabilityResponse.ok) {
-              const availabilityData = await availabilityResponse.json()
-              setProviderAvailabilityCalendar(availabilityData)
-            } else {
-              setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
-            }
           } else {
-            throw new Error('Unable to load your service profile')
+            setProfileMessage('No profile exists yet. Create a new profile to get started.')
           }
-
-          if (!shouldLoadRequesterData) {
-            setMusicians([])
-            setPerformanceRequests([])
-            setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
-            return
-          }
+        } else if (profileResponse.status === 404) {
+          setServiceProfiles([])
+          setActiveServiceProfile(null)
+          setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+          setProfileMessage('No profile exists yet. Create a new profile to get started.')
+        } else {
+          throw new Error('Unable to load your service profile')
         }
 
-        const [musiciansResponse, requestResponse] = shouldLoadProfile ? responses.slice(3) : responses.slice(1)
+        if (supportIssuesResponse.ok) {
+          const issuesData = await supportIssuesResponse.json()
+          setSupportIssues(issuesData)
+        } else {
+          setSupportIssues([])
+        }
+
+        if (publicServiceProvidersResponse.ok) {
+          const publicProviders = await publicServiceProvidersResponse.json()
+          setPublicServiceProviders(publicProviders)
+          setMusicians(publicProviders)
+        } else {
+          setPublicServiceProviders([])
+          setMusicians([])
+        }
+
+        if (selectedServiceProfileId) {
+          await refreshServiceProfileCalendar(selectedServiceProfileId, loadedProfiles)
+        } else if (!canManageAvailability) {
+          setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
+        }
+
+        if (!shouldLoadRequesterData) {
+          setPerformanceRequests([])
+          setCustomerAvailabilityCalendar(emptyAvailabilityCalendar)
+          return
+        }
+
+        const profileOffset = 4
+        const [musiciansResponse, requestResponse] = responses.slice(profileOffset)
 
         if (requestResponse.status === 401) {
           setPerformanceRequests([])
@@ -533,16 +722,55 @@ function AppShell() {
     if (isAuthenticating || !currentUser) {
       return
     }
+  }, [currentUser, isAuthenticating, location.pathname, navigate, serviceProfile])
 
-    if (currentUser.role === 'SERV-PROVIDER' && location.pathname !== '/my-profile') {
-      navigate('/my-profile', { replace: true })
+  useEffect(() => {
+    if (!currentUser || location.pathname !== '/contact-admin') {
       return
     }
 
-    if (currentUser.role === 'ADMIN' && serviceProfile && location.pathname !== '/my-profile') {
-      navigate('/my-profile', { replace: true })
+    if (currentUser.role === 'ADMIN') {
+      navigate('/admin/issues', { replace: true })
     }
-  }, [currentUser, isAuthenticating, location.pathname, navigate, serviceProfile])
+  }, [currentUser, location.pathname, navigate])
+
+  useEffect(() => {
+    if (!currentUser || location.pathname !== '/admin/issues') {
+      return
+    }
+
+    if (currentUser.role !== 'ADMIN') {
+      navigate('/contact-admin', { replace: true })
+    }
+  }, [currentUser, location.pathname, navigate])
+
+  useEffect(() => {
+    let ignore = false
+
+    async function syncLocationFromZip() {
+      try {
+        const location = await resolveZipLocation(serviceProfileForm.zip_code)
+        if (!location || ignore) {
+          return
+        }
+
+        setServiceProfileForm((current) => ({
+          ...current,
+          zip_code: location.zip_code,
+          city: location.city || current.city,
+          state: location.state || current.state,
+        }))
+      } catch {
+        return
+      }
+    }
+
+    syncLocationFromZip()
+
+    return () => {
+      ignore = true
+    }
+  }, [serviceProfileForm.zip_code])
 
   useEffect(() => {
     if (!currentUser || !pendingContactProvider) {
@@ -611,10 +839,15 @@ function AppShell() {
     return musicians.find((musician) => String(musician.id) === String(requestForm.musician_id))
   }, [musicians, requestForm.musician_id])
 
+  const selectedServiceProfile = useMemo(() => {
+    return serviceProfiles.find((profile) => String(profile.id) === String(selectedServiceProfileId)) || null
+  }, [serviceProfiles, selectedServiceProfileId])
+
   const isServiceProvider = currentUser?.role === 'SERV-PROVIDER'
   const isAdmin = currentUser?.role === 'ADMIN'
-  const showMusicianEnrollment = canEnrollMusician(currentUser?.role)
+  const canManageAvailability = isServiceProvider || isAdmin
   const showConsumerRequest = canRequestPerformance(currentUser?.role)
+  const showOwnProfile = Boolean(currentUser)
 
   function goTo(path) {
     navigate(path)
@@ -639,6 +872,74 @@ function AppShell() {
     }
 
     window.location.href = buildProviderContactLink(provider)
+  }
+
+  async function handleSupportIssueSubmit(event) {
+    event.preventDefault()
+    setSupportMessage('')
+
+    if (!currentUser || currentUser.role === 'ADMIN') {
+      setSupportMessage('Only consumers and service providers can send support issues from this page.')
+      return
+    }
+
+    if (!supportIssueForm.subject.trim() || !supportIssueForm.message.trim()) {
+      setSupportMessage('Please add a subject and a message before sending the issue.')
+      return
+    }
+
+    setIsSavingSupportIssue(true)
+    try {
+      const response = await fetch('/api/support-issues', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({
+          subject: supportIssueForm.subject,
+          message: supportIssueForm.message,
+        }),
+      })
+
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) {
+        setSupportMessage(formatAuthError(payload?.detail, 'Could not send your issue.'))
+        return
+      }
+
+      setSupportIssueForm(emptySupportIssueForm)
+      await refreshSupportIssues()
+      setSupportMessage(payload?.status ? 'Issue sent to admin.' : 'Issue sent to admin.')
+    } finally {
+      setIsSavingSupportIssue(false)
+    }
+  }
+
+  async function handleSupportIssueReply(issueId, replyForm) {
+    if (currentUser?.role !== 'ADMIN') {
+      return null
+    }
+
+    const response = await fetch(`/api/support-issues/${issueId}/reply`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify(replyForm),
+    })
+
+    const payload = await response.json().catch(() => null)
+    if (!response.ok) {
+      throw new Error(formatAuthError(payload?.detail, 'Could not update the issue.'))
+    }
+
+    const updatedIssue = payload
+    setSupportIssues((currentIssues) =>
+      currentIssues.map((issue) => (String(issue.id) === String(updatedIssue.id) ? updatedIssue : issue)),
+    )
+    return updatedIssue
   }
 
   async function handleAuthSubmit(event) {
@@ -733,53 +1034,6 @@ function AppShell() {
     navigate('/', { replace: true })
   }
 
-  async function handleMusicianSubmit(event) {
-    event.preventDefault()
-    setMessage('')
-
-    const response = await fetch('/api/musicians', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...getAuthHeaders(),
-      },
-      body: JSON.stringify(musicianForm),
-    })
-
-    if (!response.ok) {
-      setMessage('Could not save the musician profile.')
-      return
-    }
-
-    const createdMusician = await response.json()
-    setMusicians((current) => [createdMusician, ...current])
-    setMusicianForm(emptyMusicianForm)
-    setRequestForm((current) => ({
-      ...current,
-      musician_id: String(createdMusician.id),
-    }))
-    setMessage('The new musician profile is now available in the local musicians list.')
-
-    if (currentUser?.role === 'ADMIN') {
-      setServiceProfile(createdMusician)
-      setServiceProfileForm({
-        full_name: createdMusician.full_name,
-        instrument: createdMusician.instrument,
-        city: createdMusician.city,
-        state: createdMusician.state,
-        phone: createdMusician.phone,
-        bio: createdMusician.bio,
-        rate: createdMusician.rate,
-        preferred_event_type: createdMusician.preferred_event_type,
-        preferred_contact_method: createdMusician.preferred_contact_method,
-        available_weekends: createdMusician.available_weekends,
-        travel_buffer_minutes: createdMusician.travel_buffer_minutes ?? 120,
-      })
-      setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
-      navigate('/my-profile', { replace: true })
-    }
-  }
-
   async function handleRequestSubmit(event) {
     event.preventDefault()
     setMessage('')
@@ -845,8 +1099,9 @@ function AppShell() {
     setIsSavingProfile(true)
 
     try {
-      const response = await fetch('/api/service-profile/me', {
-        method: 'PUT',
+      const isUpdatingProfile = Boolean(selectedServiceProfileId)
+      const response = await fetch(isUpdatingProfile ? `/api/service-profiles/me/${selectedServiceProfileId}` : '/api/service-profiles/me', {
+        method: isUpdatingProfile ? 'PUT' : 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...getAuthHeaders(),
@@ -861,29 +1116,17 @@ function AppShell() {
         return
       }
 
-      setServiceProfile(payload)
-      setServiceProfileForm({
-        full_name: payload.full_name,
-        instrument: payload.instrument,
-        city: payload.city,
-        state: payload.state,
-        phone: payload.phone,
-        bio: payload.bio,
-        rate: payload.rate,
-        preferred_event_type: payload.preferred_event_type,
-        preferred_contact_method: payload.preferred_contact_method,
-        available_weekends: payload.available_weekends,
-        travel_buffer_minutes: payload.travel_buffer_minutes ?? 120,
-      })
-      setProfileMessage('Your service provider profile was saved.')
+      const nextProfiles = isUpdatingProfile
+        ? serviceProfiles.map((profile) => (String(profile.id) === String(payload.id) ? payload : profile))
+        : [payload, ...serviceProfiles]
 
-      const availabilityResponse = await fetch('/api/service-profile/me/availability-calendar?days=30', {
-        headers: getAuthHeaders(),
-      })
-      if (availabilityResponse.ok) {
-        const availabilityData = await availabilityResponse.json()
-        setProviderAvailabilityCalendar(availabilityData)
+      setServiceProfiles(nextProfiles)
+      setActiveServiceProfile(payload)
+      if (canManageAvailability) {
+        await refreshServiceProfileCalendar(payload.id, nextProfiles)
       }
+      setProfileMessage(isUpdatingProfile ? 'Your service provider profile was saved.' : 'Your service provider profile was created.')
+      setProfileMessage(isUpdatingProfile ? 'Your profile was saved.' : 'Your profile was created.')
     } catch {
       setProfileMessage('Unable to contact the server. Check that the backend is running and try again.')
     } finally {
@@ -895,7 +1138,12 @@ function AppShell() {
     setAvailabilityMessage('')
     setIsSavingAvailability(true)
     try {
-      const createResponse = await fetch('/api/service-profile/me/availability', {
+      if (!selectedServiceProfileId) {
+        setAvailabilityMessage('Select a profile before adding availability.')
+        return false
+      }
+
+      const createResponse = await fetch(`/api/service-profiles/me/${selectedServiceProfileId}/availability`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -913,14 +1161,8 @@ function AppShell() {
         return false
       }
 
-      const calendarResponse = await fetch('/api/service-profile/me/availability-calendar?days=30', {
-        headers: getAuthHeaders(),
-      })
-      if (calendarResponse.ok) {
-        const calendarData = await calendarResponse.json()
-        setProviderAvailabilityCalendar(calendarData)
-        setAvailabilityMessage('Availability slot added.')
-      }
+      await refreshServiceProfileCalendar(selectedServiceProfileId, serviceProfiles)
+      setAvailabilityMessage('Availability slot added.')
       return true
     } catch {
       setAvailabilityMessage('Unable to contact the server. Check that the backend is running and try again.')
@@ -934,7 +1176,12 @@ function AppShell() {
     setAvailabilityMessage('')
     setIsSavingAvailability(true)
     try {
-      const deleteResponse = await fetch(`/api/service-profile/me/availability/${slotId}`, {
+      if (!selectedServiceProfileId) {
+        setAvailabilityMessage('Select a profile before managing availability.')
+        return
+      }
+
+      const deleteResponse = await fetch(`/api/service-profiles/me/${selectedServiceProfileId}/availability/${slotId}`, {
         method: 'DELETE',
         headers: {
           ...getAuthHeaders(),
@@ -947,13 +1194,7 @@ function AppShell() {
         return
       }
 
-      const calendarResponse = await fetch('/api/service-profile/me/availability-calendar?days=30', {
-        headers: getAuthHeaders(),
-      })
-      if (calendarResponse.ok) {
-        const calendarData = await calendarResponse.json()
-        setProviderAvailabilityCalendar(calendarData)
-      }
+      await refreshServiceProfileCalendar(selectedServiceProfileId, serviceProfiles)
       setAvailabilityMessage('Availability slot removed.')
     } catch {
       setAvailabilityMessage('Unable to contact the server. Check that the backend is running and try again.')
@@ -966,7 +1207,12 @@ function AppShell() {
     setAvailabilityMessage('')
     setIsSavingAvailability(true)
     try {
-      const updateResponse = await fetch(`/api/service-profile/me/availability/${slotId}`, {
+      if (!selectedServiceProfileId) {
+        setAvailabilityMessage('Select a profile before managing availability.')
+        return false
+      }
+
+      const updateResponse = await fetch(`/api/service-profiles/me/${selectedServiceProfileId}/availability/${slotId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -984,13 +1230,7 @@ function AppShell() {
         return false
       }
 
-      const calendarResponse = await fetch('/api/service-profile/me/availability-calendar?days=30', {
-        headers: getAuthHeaders(),
-      })
-      if (calendarResponse.ok) {
-        const calendarData = await calendarResponse.json()
-        setProviderAvailabilityCalendar(calendarData)
-      }
+      await refreshServiceProfileCalendar(selectedServiceProfileId, serviceProfiles)
       setAvailabilityMessage('Availability slot updated.')
       return true
     } catch {
@@ -1003,6 +1243,18 @@ function AppShell() {
 
   return (
     <div className="app-shell">
+      <div className="floating-decor" aria-hidden="true">
+        <span className="floating-bubble bubble-a" />
+        <span className="floating-bubble bubble-b" />
+        <span className="floating-bubble bubble-c" />
+        <span className="floating-bubble bubble-d" />
+        <span className="floating-bubble bubble-e" />
+        <span className="floating-note note-a">♪</span>
+        <span className="floating-note note-b">♫</span>
+        <span className="floating-note note-c">♬</span>
+        <span className="floating-note note-d">♪</span>
+        <span className="floating-note note-e">♫</span>
+      </div>
       <div className="ambient ambient-one" />
       <div className="ambient ambient-two" />
 
@@ -1042,7 +1294,6 @@ function AppShell() {
               dashboard={dashboard}
               isLoading={publicLoading}
               currentUser={null}
-              canEnroll={false}
               canRequest={false}
               onRequest={() => openAuthModal('login', '/request-performance')}
               publicServiceProviders={publicServiceProviders}
@@ -1085,33 +1336,26 @@ function AppShell() {
                 <NavLink className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')} to="/">
                   Home
                 </NavLink>
-                {isServiceProvider ? (
-                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/my-profile">
-                    My profile
-                  </NavLink>
-                ) : isAdmin && serviceProfile ? (
-                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/my-profile">
-                    My profile
-                  </NavLink>
-                ) : isAdmin ? (
-                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/musicians/enroll">
-                    Enroll musician
+                {isAdmin ? (
+                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/admin/issues">
+                    Issue inbox
                   </NavLink>
                 ) : (
-                  <NavLink className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')} to="/musicians">
-                    Local musicians
+                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/contact-admin">
+                    Contact admin
                   </NavLink>
                 )}
-                {!isServiceProvider && !isAdmin && showMusicianEnrollment ? (
-                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/musicians/enroll">
-                    Enroll musician
+                {showOwnProfile ? (
+                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/my-profile">
+                    My profile
                   </NavLink>
                 ) : null}
-                {showConsumerRequest ? (
-                  <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/request-performance">
-                    Request a performance
-                  </NavLink>
-                ) : null}
+                <NavLink className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')} to="/musicians">
+                  Local musicians
+                </NavLink>
+                <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/request-performance">
+                  Request a performance
+                </NavLink>
                 <button className="button secondary slim-button nav-button" type="button" onClick={handleLogout}>
                   Sign out
                 </button>
@@ -1129,10 +1373,8 @@ function AppShell() {
                   <HomePage
                     dashboard={dashboard}
                     isLoading={isLoading}
-                    onEnroll={() => goTo(isServiceProvider ? '/my-profile' : '/musicians/enroll')}
                     onRequest={() => goTo('/request-performance')}
                     currentUser={currentUser}
-                    canEnroll={!isServiceProvider && showMusicianEnrollment}
                     canRequest={showConsumerRequest}
                     onContactProvider={handleContactProvider}
                     publicServiceProviders={publicServiceProviders}
@@ -1142,23 +1384,17 @@ function AppShell() {
               <Route
                 path="/musicians"
                 element={
-                  isServiceProvider ? (
-                    <Navigate to="/my-profile" replace />
-                  ) : (
-                    <MusiciansPage
-                      musicians={musicians}
-                      onEnroll={() => goTo('/musicians/enroll')}
-                      canEnroll={showMusicianEnrollment}
-                      currentUser={currentUser}
-                      onContactProvider={handleContactProvider}
-                    />
-                  )
+                  <MusiciansPage
+                    musicians={musicians}
+                    currentUser={currentUser}
+                    onContactProvider={handleContactProvider}
+                  />
                 }
               />
               <Route
                 path="/my-profile"
                 element={
-                  <RouteGuard currentUser={currentUser} allowedRoles={["SERV-PROVIDER", "ADMIN"]} redirectTo={getDefaultRoute(currentUser.role)}>
+                  <RouteGuard currentUser={currentUser} allowedRoles={["CONSUMER", "SERV-PROVIDER", "ADMIN"]} redirectTo={getDefaultRoute(currentUser?.role)}>
                     <ManageServiceProfilePage
                       profileForm={serviceProfileForm}
                       setProfileForm={setServiceProfileForm}
@@ -1171,29 +1407,55 @@ function AppShell() {
                       availabilityMessage={availabilityMessage}
                       availabilityCalendar={providerAvailabilityCalendar}
                       preferredEventTypes={providerEventTypes}
+                      canManageAvailability={canManageAvailability}
+                      serviceProfiles={serviceProfiles}
+                      selectedServiceProfileId={selectedServiceProfileId}
+                      onSelectServiceProfile={handleSelectServiceProfile}
+                      onCreateNewProfile={() => {
+                        setActiveServiceProfile(null)
+                        setProfileMessage('Create a new profile below to add another account.')
+                      }}
+                      onDeleteServiceProfile={handleDeleteServiceProfile}
                       onCreateAvailabilitySlot={handleCreateAvailabilitySlot}
                       onUpdateAvailabilitySlot={handleUpdateAvailabilitySlot}
                       onDeleteAvailabilitySlot={handleDeleteAvailabilitySlot}
+                      formatProviderLocation={formatProviderLocation}
                     />
                   </RouteGuard>
                 }
               />
               <Route
-                path="/musicians/enroll"
+                path="/contact-admin"
                 element={
-                  isServiceProvider ? (
-                    <Navigate to="/my-profile" replace />
-                  ) : (
-                    <RouteGuard currentUser={currentUser} allowedRoles={["SERV-PROVIDER", "ADMIN"]} redirectTo={getDefaultRoute(currentUser.role)}>
-                      <EnrollMusicianPage musicianForm={musicianForm} setMusicianForm={setMusicianForm} onSubmit={handleMusicianSubmit} />
-                    </RouteGuard>
-                  )
+                  <RouteGuard currentUser={currentUser} allowedRoles={["CONSUMER", "SERV-PROVIDER"]} redirectTo={getDefaultRoute(currentUser?.role)}>
+                    <ContactAdminPage
+                      currentUser={currentUser}
+                      supportIssueForm={supportIssueForm}
+                      setSupportIssueForm={setSupportIssueForm}
+                      supportIssues={supportIssues}
+                      onSubmit={handleSupportIssueSubmit}
+                      isSaving={isSavingSupportIssue}
+                      message={supportMessage}
+                    />
+                  </RouteGuard>
+                }
+              />
+              <Route
+                path="/admin/issues"
+                element={
+                  <RouteGuard currentUser={currentUser} allowedRoles={["ADMIN"]} redirectTo={getDefaultRoute(currentUser?.role)}>
+                    <AdminIssuesPage
+                      currentUser={currentUser}
+                      supportIssues={supportIssues}
+                      onReplyIssue={handleSupportIssueReply}
+                    />
+                  </RouteGuard>
                 }
               />
               <Route
                 path="/request-performance"
                 element={
-                  <RouteGuard currentUser={currentUser} allowedRoles={protectedRoles.requests} redirectTo={getDefaultRoute(currentUser.role)}>
+                  <RouteGuard currentUser={currentUser} allowedRoles={["CONSUMER", "SERV-PROVIDER", "ADMIN"]} redirectTo={getDefaultRoute(currentUser?.role)}>
                     <RequestPerformancePage
                       requestForm={requestForm}
                       setRequestForm={setRequestForm}

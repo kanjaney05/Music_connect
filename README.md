@@ -27,3 +27,9 @@ The frontend runs on `http://localhost:5173` and proxies `/api` requests to the 
 
 ADMIN Username: kanjaney05@gmail.com
 ADMIN Password: MusicAdmin
+
+SERVICE PROVIDER Username: kumar.anjaney22@gmail.com
+SERVICE PROVIDER Password: Password1
+
+CONSUMER Username: anikasupriya947@gmail.com
+CONSUMER Password: RubberDuck

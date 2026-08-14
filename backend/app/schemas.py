@@ -42,8 +42,9 @@ class AuthTokenResponse(AuthUserRead):
 class ServiceProfileBase(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     instrument: str = Field(min_length=2, max_length=80)
-    city: str = Field(min_length=2, max_length=120)
-    state: str = Field(min_length=2, max_length=80)
+    zip_code: str = Field(min_length=5, max_length=20)
+    city: str = Field(default="", max_length=120)
+    state: str = Field(default="", max_length=80)
     phone: str = Field(min_length=7, max_length=40)
     email: str = Field(min_length=5, max_length=180)
     bio: str = Field(default="Community musician available for local events.", max_length=1000)
@@ -61,8 +62,9 @@ class ServiceProfileCreate(ServiceProfileBase):
 class ServiceProfileUpsert(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     instrument: str = Field(min_length=2, max_length=80)
-    city: str = Field(min_length=2, max_length=120)
-    state: str = Field(min_length=2, max_length=80)
+    zip_code: str = Field(min_length=5, max_length=20)
+    city: str = Field(default="", max_length=120)
+    state: str = Field(default="", max_length=80)
     phone: str = Field(min_length=7, max_length=40)
     bio: str = Field(default="Community musician available for local events.", max_length=1000)
     rate: str = Field(default="Available upon request", max_length=80)
@@ -80,6 +82,7 @@ class ServiceProfileRead(ServiceProfileBase):
 
     full_name: str
     instrument: str
+    zip_code: str
     city: str
     state: str
     phone: str
@@ -90,6 +93,38 @@ class ServiceProfileRead(ServiceProfileBase):
     preferred_contact_method: str
     available_weekends: bool
     travel_buffer_minutes: int
+
+
+class SupportIssueBase(BaseModel):
+    subject: str = Field(min_length=3, max_length=160)
+    message: str = Field(min_length=10, max_length=4000)
+
+
+class SupportIssueCreate(SupportIssueBase):
+    pass
+
+
+class SupportIssueReplyUpdate(BaseModel):
+    status: str = Field(default="In progress", max_length=40)
+    admin_reply: str = Field(default="", max_length=4000)
+
+
+class SupportIssueRead(SupportIssueBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_email: str
+    user_role: str
+    status: str
+    admin_reply: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ZipLookupRead(BaseModel):
+    zip_code: str
+    city: str
+    state: str
 
 
 class AvailabilitySlotCreate(BaseModel):

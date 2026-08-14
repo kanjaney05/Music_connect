@@ -1,7 +1,11 @@
 import os
+import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import urlopen
 
 import jwt
 from passlib.context import CryptContext
@@ -9,11 +13,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, inspect, select, text
+from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import AvailabilitySlot, CommunityEvent, PerformanceRequest, ServiceProfile, User
+from .models import AvailabilitySlot, CommunityEvent, PerformanceRequest, ServiceProfile, SupportIssue, User
 from .schemas import (
     AvailabilityCalendarRead,
     AvailabilityDayRead,
@@ -34,6 +38,10 @@ from .schemas import (
     ServiceProfileCreate,
     ServiceProfileRead,
     ServiceProfileUpsert,
+    SupportIssueCreate,
+    SupportIssueRead,
+    SupportIssueReplyUpdate,
+    ZipLookupRead,
 )
 
 app = FastAPI(title="Music Connect API", version="1.0.0")
@@ -218,6 +226,8 @@ def ensure_service_profile_columns() -> None:
     with engine.begin() as connection:
         if "owner_email" not in existing_columns:
             connection.execute(text("ALTER TABLE service_profiles ADD COLUMN owner_email VARCHAR(180) NOT NULL DEFAULT ''"))
+        if "zip_code" not in existing_columns:
+            connection.execute(text("ALTER TABLE service_profiles ADD COLUMN zip_code VARCHAR(20) NOT NULL DEFAULT ''"))
         if "state" not in existing_columns:
             connection.execute(text("ALTER TABLE service_profiles ADD COLUMN state VARCHAR(80) NOT NULL DEFAULT ''"))
         if "phone" not in existing_columns:
@@ -250,6 +260,17 @@ def ensure_availability_slot_columns() -> None:
 def backfill_service_profiles(session: Session) -> None:
     profiles = session.scalars(select(ServiceProfile)).all()
     for profile in profiles:
+        if not profile.zip_code.strip():
+            if "Brooklyn" in profile.city:
+                profile.zip_code = "11201"
+            elif "Jersey City" in profile.city:
+                profile.zip_code = "07302"
+
+        location = lookup_zip_location(profile.zip_code)
+        if location:
+            profile.city = location["city"]
+            profile.state = location["state"]
+
         if not profile.state.strip():
             if "Brooklyn" in profile.city:
                 profile.state = "NY"
@@ -280,6 +301,48 @@ def backfill_service_profiles(session: Session) -> None:
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def normalize_zip_code(zip_code: str) -> str:
+    return zip_code.strip()
+
+
+def lookup_zip_location(zip_code: str) -> Optional[dict[str, str]]:
+    normalized_zip = normalize_zip_code(zip_code)
+    zip_digits = "".join(character for character in normalized_zip if character.isdigit())
+    if len(zip_digits) < 5:
+        return None
+
+    lookup_zip = zip_digits[:5]
+    url = f"https://api.zippopotam.us/us/{quote(lookup_zip)}"
+    try:
+        with urlopen(url, timeout=5) as response:
+            if getattr(response, "status", 200) != 200:
+                return None
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        return None
+
+    places = payload.get("places")
+    if not places:
+        return None
+
+    first_place = places[0]
+    city = str(first_place.get("place name", "")).strip()
+    state = str(first_place.get("state abbreviation", "")).strip()
+    if not city or not state:
+        return None
+
+    return {"zip_code": lookup_zip, "city": city, "state": state}
+
+
+@app.get("/api/zip-lookup/{zip_code}", response_model=ZipLookupRead)
+def zip_lookup(zip_code: str) -> ZipLookupRead:
+    location = lookup_zip_location(zip_code)
+    if location is None:
+        raise HTTPException(status_code=404, detail="Zip code not found")
+
+    return ZipLookupRead(**location)
 
 
 def get_timezone_label() -> str:
@@ -390,13 +453,71 @@ def get_user_by_email(session: Session, email: str) -> Optional[User]:
     return session.scalar(select(User).where(User.email == normalize_email(email)))
 
 
-def get_service_profile_by_email(session: Session, email: str) -> Optional[ServiceProfile]:
+def get_owned_service_profiles(session: Session, email: str) -> list[ServiceProfile]:
     normalized_email = normalize_email(email)
-    return session.scalar(
-        select(ServiceProfile).where(
-            (ServiceProfile.owner_email == normalized_email) | (ServiceProfile.email == normalized_email)
-        )
+    statement = (
+        select(ServiceProfile)
+        .where((ServiceProfile.owner_email == normalized_email) | (ServiceProfile.email == normalized_email))
+        .order_by(ServiceProfile.created_at.desc(), ServiceProfile.id.desc())
     )
+    return list(session.scalars(statement))
+
+
+def get_service_profile_by_email(session: Session, email: str) -> Optional[ServiceProfile]:
+    profiles = get_owned_service_profiles(session, email)
+    return profiles[0] if profiles else None
+
+
+def get_owned_service_profile(session: Session, email: str, profile_id: Optional[int] = None) -> Optional[ServiceProfile]:
+    normalized_email = normalize_email(email)
+    statement = select(ServiceProfile).where(
+        (ServiceProfile.owner_email == normalized_email) | (ServiceProfile.email == normalized_email)
+    )
+    if profile_id is not None:
+        statement = statement.where(ServiceProfile.id == profile_id)
+    else:
+        statement = statement.order_by(ServiceProfile.created_at.desc(), ServiceProfile.id.desc())
+
+    return session.scalar(statement)
+
+
+def require_owned_service_profile(session: Session, email: str, profile_id: int) -> ServiceProfile:
+    profile = get_owned_service_profile(session, email, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service profile not found")
+
+    return profile
+
+
+def apply_service_profile_payload(profile: ServiceProfile, data: dict[str, object], owner_email: str) -> ServiceProfile:
+    normalized_email = normalize_email(owner_email)
+    raw_zip_code = str(data.get("zip_code") or "")
+    normalized_zip_code = normalize_zip_code(raw_zip_code)
+    location = lookup_zip_location(normalized_zip_code)
+    if location is None:
+        raise HTTPException(status_code=400, detail="Enter a valid zip code to load the city and state.")
+
+    profile.owner_email = normalized_email
+    profile.full_name = data["full_name"]  # type: ignore[index]
+    profile.instrument = data["instrument"]  # type: ignore[index]
+    profile.zip_code = normalized_zip_code
+    profile.city = location["city"]
+    profile.state = location["state"]
+    profile.phone = data["phone"]  # type: ignore[index]
+    profile.email = normalized_email
+    profile.contact = f"{data['phone']} | {normalized_email}"
+    profile.bio = data.get("bio") or "Community musician available for local events."
+    profile.rate = data.get("rate") or "Available upon request"
+    profile.preferred_event_type = data.get("preferred_event_type", "Any event")
+    profile.preferred_contact_method = data.get("preferred_contact_method", "email")
+    profile.available_weekends = data.get("available_weekends", True)
+    profile.travel_buffer_minutes = data.get("travel_buffer_minutes", 120)
+    return profile
+
+
+def remove_service_profile_dependencies(session: Session, profile_id: int) -> None:
+    session.execute(delete(AvailabilitySlot).where(AvailabilitySlot.service_profile_id == profile_id))
+    session.execute(delete(PerformanceRequest).where(PerformanceRequest.musician_id == profile_id))
 
 
 def get_current_user(
@@ -550,6 +671,72 @@ def dashboard(
     )
 
 
+@app.get("/api/support-issues", response_model=list[SupportIssueRead])
+def list_support_issues_for_admin(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("ADMIN")),
+) -> list[SupportIssue]:
+    statement = select(SupportIssue).order_by(SupportIssue.created_at.desc(), SupportIssue.id.desc())
+    return list(db.scalars(statement))
+
+
+@app.get("/api/support-issues/me", response_model=list[SupportIssueRead])
+def list_my_support_issues(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[SupportIssue]:
+    if user.role == "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin should use the issues inbox")
+
+    statement = (
+        select(SupportIssue)
+        .where(SupportIssue.user_email == normalize_email(user.email))
+        .order_by(SupportIssue.created_at.desc(), SupportIssue.id.desc())
+    )
+    return list(db.scalars(statement))
+
+
+@app.post("/api/support-issues", response_model=SupportIssueRead, status_code=201)
+def create_support_issue(
+    payload: SupportIssueCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("CONSUMER", "SERV-PROVIDER")),
+) -> SupportIssue:
+    if user.role == "ADMIN":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin should use the issues inbox")
+
+    issue = SupportIssue(
+        user_email=normalize_email(user.email),
+        user_role=user.role,
+        subject=payload.subject.strip(),
+        message=payload.message.strip(),
+        status="Open",
+        admin_reply="",
+    )
+    db.add(issue)
+    db.commit()
+    db.refresh(issue)
+    return issue
+
+
+@app.put("/api/support-issues/{issue_id}/reply", response_model=SupportIssueRead)
+def reply_to_support_issue(
+    issue_id: int,
+    payload: SupportIssueReplyUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("ADMIN")),
+) -> SupportIssue:
+    issue = db.get(SupportIssue, issue_id)
+    if issue is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Support issue not found")
+
+    issue.status = payload.status.strip() or issue.status
+    issue.admin_reply = payload.admin_reply.strip()
+    db.commit()
+    db.refresh(issue)
+    return issue
+
+
 @app.get("/api/musicians", response_model=list[ServiceProfileRead])
 def list_musicians(
     db: Session = Depends(get_db),
@@ -598,7 +785,7 @@ def create_service(
 @app.get("/api/service-profile/me", response_model=ServiceProfileRead)
 def read_own_service_profile(
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
+    user: User = Depends(get_current_user),
 ) -> ServiceProfile:
     profile = get_service_profile_by_email(db, user.email)
     if profile is None:
@@ -611,37 +798,68 @@ def read_own_service_profile(
 def upsert_own_service_profile(
     payload: ServiceProfileUpsert,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
+    user: User = Depends(get_current_user),
 ) -> ServiceProfile:
     profile = get_service_profile_by_email(db, user.email)
-    data = payload.model_dump()
 
     if profile is None:
-        profile = ServiceProfile(
-            owner_email=normalize_email(user.email),
-            email=normalize_email(user.email),
-            contact=f"{data['phone']} | {user.email}",
-        )
+        profile = ServiceProfile()
         db.add(profile)
 
-    profile.owner_email = normalize_email(user.email)
-    profile.full_name = data["full_name"]
-    profile.instrument = data["instrument"]
-    profile.city = data["city"]
-    profile.state = data["state"]
-    profile.phone = data["phone"]
-    profile.email = normalize_email(user.email)
-    profile.contact = f"{data['phone']} | {user.email}"
-    profile.bio = data.get("bio") or "Community musician available for local events."
-    profile.rate = data.get("rate") or "Available upon request"
-    profile.preferred_event_type = data.get("preferred_event_type", "Any event")
-    profile.preferred_contact_method = data.get("preferred_contact_method", "email")
-    profile.available_weekends = data.get("available_weekends", True)
-    profile.travel_buffer_minutes = data.get("travel_buffer_minutes", 120)
+    apply_service_profile_payload(profile, payload.model_dump(), user.email)
 
     db.commit()
     db.refresh(profile)
     return profile
+
+
+@app.get("/api/service-profiles/me", response_model=list[ServiceProfileRead])
+def list_own_service_profiles(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ServiceProfile]:
+    return get_owned_service_profiles(db, user.email)
+
+
+@app.post("/api/service-profiles/me", response_model=ServiceProfileRead, status_code=201)
+def create_own_service_profile(
+    payload: ServiceProfileUpsert,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ServiceProfile:
+    profile = ServiceProfile()
+    db.add(profile)
+    apply_service_profile_payload(profile, payload.model_dump(), user.email)
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+@app.put("/api/service-profiles/me/{profile_id}", response_model=ServiceProfileRead)
+def update_own_service_profile_by_id(
+    profile_id: int,
+    payload: ServiceProfileUpsert,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ServiceProfile:
+    profile = require_owned_service_profile(db, user.email, profile_id)
+    apply_service_profile_payload(profile, payload.model_dump(), user.email)
+    db.commit()
+    db.refresh(profile)
+    return profile
+
+
+@app.delete("/api/service-profiles/me/{profile_id}", response_model=ApiMessage)
+def delete_own_service_profile(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ApiMessage:
+    profile = require_owned_service_profile(db, user.email, profile_id)
+    remove_service_profile_dependencies(db, profile.id)
+    db.delete(profile)
+    db.commit()
+    return ApiMessage(message="Service profile deleted")
 
 
 @app.get("/api/service-profile/me/availability-calendar", response_model=AvailabilityCalendarRead)
@@ -657,6 +875,18 @@ def read_own_availability_calendar(
     return build_availability_calendar(db, profile.id, profile.travel_buffer_minutes, days=days)
 
 
+@app.get("/api/service-profiles/me/{profile_id}/availability-calendar", response_model=AvailabilityCalendarRead)
+def read_own_availability_calendar_by_profile_id(
+    profile_id: int,
+    days: int = AVAILABILITY_WINDOW_DAYS,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
+) -> AvailabilityCalendarRead:
+    profile = require_owned_service_profile(db, user.email, profile_id)
+
+    return build_availability_calendar(db, profile.id, profile.travel_buffer_minutes, days=days)
+
+
 @app.post("/api/service-profile/me/availability", response_model=AvailabilitySlotRead, status_code=201)
 def create_own_availability_slot(
     payload: AvailabilitySlotCreate,
@@ -666,6 +896,44 @@ def create_own_availability_slot(
     profile = get_service_profile_by_email(db, user.email)
     if profile is None:
         raise HTTPException(status_code=404, detail="Create your service profile before adding availability")
+
+    starts_at = normalize_slot_datetime(payload.starts_at)
+    ends_at = normalize_slot_datetime(payload.ends_at)
+    if ends_at <= starts_at:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    if starts_at.date() < datetime.now().date():
+        raise HTTPException(status_code=400, detail="Availability slots cannot be created in the past")
+
+    conflicting_slot = find_conflicting_slot(db, profile.id, starts_at, ends_at, profile.travel_buffer_minutes)
+    if conflicting_slot is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This slot conflicts with existing availability. "
+                f"Keep at least {profile.travel_buffer_minutes} minutes between performances."
+            ),
+        )
+
+    slot = AvailabilitySlot(
+        service_profile_id=profile.id,
+        starts_at=starts_at,
+        ends_at=ends_at,
+    )
+    db.add(slot)
+    db.commit()
+    db.refresh(slot)
+    return slot
+
+
+@app.post("/api/service-profiles/me/{profile_id}/availability", response_model=AvailabilitySlotRead, status_code=201)
+def create_own_availability_slot_by_profile_id(
+    profile_id: int,
+    payload: AvailabilitySlotCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
+) -> AvailabilitySlot:
+    profile = require_owned_service_profile(db, user.email, profile_id)
 
     starts_at = normalize_slot_datetime(payload.starts_at)
     ends_at = normalize_slot_datetime(payload.ends_at)
@@ -746,6 +1014,55 @@ def update_own_availability_slot(
     return slot
 
 
+@app.put("/api/service-profiles/me/{profile_id}/availability/{slot_id}", response_model=AvailabilitySlotRead)
+def update_own_availability_slot_by_profile_id(
+    profile_id: int,
+    slot_id: int,
+    payload: AvailabilitySlotUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
+) -> AvailabilitySlot:
+    profile = require_owned_service_profile(db, user.email, profile_id)
+
+    slot = db.get(AvailabilitySlot, slot_id)
+    if slot is None or slot.service_profile_id != profile.id:
+        raise HTTPException(status_code=404, detail="Availability slot not found")
+
+    if slot.is_reserved:
+        raise HTTPException(status_code=400, detail="Reserved slots cannot be edited")
+
+    starts_at = normalize_slot_datetime(payload.starts_at)
+    ends_at = normalize_slot_datetime(payload.ends_at)
+    if ends_at <= starts_at:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    if starts_at.date() < datetime.now().date():
+        raise HTTPException(status_code=400, detail="Availability slots cannot be moved to the past")
+
+    conflicting_slot = find_conflicting_slot(
+        db,
+        profile.id,
+        starts_at,
+        ends_at,
+        profile.travel_buffer_minutes,
+        ignore_slot_id=slot.id,
+    )
+    if conflicting_slot is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This slot conflicts with existing availability. "
+                f"Keep at least {profile.travel_buffer_minutes} minutes between performances."
+            ),
+        )
+
+    slot.starts_at = starts_at
+    slot.ends_at = ends_at
+    db.commit()
+    db.refresh(slot)
+    return slot
+
+
 @app.delete("/api/service-profile/me/availability/{slot_id}", response_model=ApiMessage)
 def delete_own_availability_slot(
     slot_id: int,
@@ -768,13 +1085,38 @@ def delete_own_availability_slot(
     return ApiMessage(message="Availability slot removed")
 
 
+@app.delete("/api/service-profiles/me/{profile_id}/availability/{slot_id}", response_model=ApiMessage)
+def delete_own_availability_slot_by_profile_id(
+    profile_id: int,
+    slot_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles("SERV-PROVIDER", "ADMIN")),
+) -> ApiMessage:
+    profile = require_owned_service_profile(db, user.email, profile_id)
+
+    slot = db.get(AvailabilitySlot, slot_id)
+    if slot is None or slot.service_profile_id != profile.id:
+        raise HTTPException(status_code=404, detail="Availability slot not found")
+
+    if slot.is_reserved:
+        raise HTTPException(status_code=400, detail="Reserved slots cannot be removed")
+
+    db.delete(slot)
+    db.commit()
+    return ApiMessage(message="Availability slot removed")
+
+
 def build_musician(payload: ServiceProfileCreate) -> ServiceProfile:
     data = payload.model_dump()
+    location = lookup_zip_location(str(data.get("zip_code") or ""))
+    if location is None:
+        raise HTTPException(status_code=400, detail="Enter a valid zip code to load the city and state.")
     return ServiceProfile(
         full_name=data["full_name"],
         instrument=data["instrument"],
-        city=data["city"],
-        state=data["state"],
+        zip_code=normalize_zip_code(str(data.get("zip_code") or "")),
+        city=location["city"],
+        state=location["state"],
         bio=data.get("bio") or "Community musician available for local events.",
         rate=data.get("rate") or "Available upon request",
         phone=data["phone"],

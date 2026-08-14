@@ -1,16 +1,26 @@
 export default function HomePage({
   dashboard,
   isLoading,
-  onEnroll,
   onRequest,
   currentUser,
-  canEnroll,
   canRequest,
   publicServiceProviders = [],
   onContactProvider,
   isLanding = false,
 }) {
   const isConsumer = currentUser?.role === 'CONSUMER'
+
+  function formatLocation(provider) {
+    const locationParts = [provider.city, provider.state].filter((part) => typeof part === 'string' && part.trim())
+    const location = locationParts.join(', ')
+    const zipCode = typeof provider.zip_code === 'string' && provider.zip_code.trim() ? provider.zip_code.trim() : ''
+
+    if (location && zipCode) {
+      return `${location} · ${zipCode}`
+    }
+
+    return location || zipCode || 'Location not listed'
+  }
 
   if (!isLanding) {
     return (
@@ -20,14 +30,9 @@ export default function HomePage({
           <h1>Connect local musicians with the events that need live sound.</h1>
           <p className="hero-text">
             Music Connect helps community organizers discover musicians for neighborhood gatherings, nonprofit events, school
-            programs, and celebrations while giving performers a place to enroll and share their details.
+            programs, and celebrations while giving performers a place to share their details.
           </p>
           <div className="hero-actions">
-            {canEnroll ? (
-              <button className="button primary" type="button" onClick={onEnroll}>
-                Enroll a musician
-              </button>
-            ) : null}
             {canRequest ? (
               <button className="button secondary" type="button" onClick={onRequest}>
                 Request a performance
@@ -140,7 +145,7 @@ export default function HomePage({
                   <h3>{provider.full_name}</h3>
                   <p>{provider.instrument}</p>
                 </div>
-                <p>{provider.city}</p>
+                <p>{formatLocation(provider)}</p>
                 <p>{provider.bio}</p>
                 <div className="card-meta">
                   <span>{provider.rate}</span>

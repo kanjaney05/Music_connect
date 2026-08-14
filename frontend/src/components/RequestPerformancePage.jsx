@@ -89,7 +89,8 @@ export default function RequestPerformancePage({
                 </option>
                 {musicians.map((musician) => (
                   <option key={musician.id} value={musician.id}>
-                    {musician.full_name} - {musician.instrument} ({musician.city}, {musician.state})
+                    {musician.full_name} - {musician.instrument} ({musician.city}, {musician.state}
+                    {musician.zip_code ? ` · ${musician.zip_code}` : ''})
                   </option>
                 ))}
               </select>
@@ -193,6 +194,7 @@ export default function RequestPerformancePage({
             <h2>{selectedMusician.full_name}</h2>
             <p>
               {selectedMusician.instrument} in {selectedMusician.city}, {selectedMusician.state}
+              {selectedMusician.zip_code ? ` · ${selectedMusician.zip_code}` : ''}
             </p>
             <p>Preferred event: {selectedMusician.preferred_event_type || 'Any event'}</p>
             <p>Prefers requests by {selectedMusician.preferred_contact_method === 'phone' ? 'phone' : 'email'}</p>

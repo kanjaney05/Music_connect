@@ -14,6 +14,7 @@ class ServiceProfile(Base):
     owner_email: Mapped[str] = mapped_column(String(180), nullable=False, default="")
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     instrument: Mapped[str] = mapped_column(String(80), nullable=False)
+    zip_code: Mapped[str] = mapped_column(String(20), nullable=False, default="")
     city: Mapped[str] = mapped_column(String(120), nullable=False)
     state: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     rate: Mapped[str] = mapped_column(String(80), nullable=False, default="Available upon request")
@@ -36,6 +37,20 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(40), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class SupportIssue(Base):
+    __tablename__ = "support_issues"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_email: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    user_role: Mapped[str] = mapped_column(String(40), nullable=False)
+    subject: Mapped[str] = mapped_column(String(160), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="Open")
+    admin_reply: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
 class CommunityEvent(Base):

@@ -1,6 +1,7 @@
 export { default as AuthPage } from './AuthPage'
 export { default as HomePage } from './HomePage'
 export { default as MusiciansPage } from './MusiciansPage'
-export { default as EnrollMusicianPage } from './EnrollMusicianPage'
 export { default as RequestPerformancePage } from './RequestPerformancePage'
 export { default as ManageServiceProfilePage } from './ManageServiceProfilePage'
+export { default as ContactAdminPage } from './ContactAdminPage'
+export { default as AdminIssuesPage } from './AdminIssuesPage'

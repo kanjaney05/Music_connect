@@ -1,5 +1,17 @@
-export default function MusiciansPage({ musicians, onEnroll, canEnroll, currentUser, onContactProvider }) {
+export default function MusiciansPage({ musicians, currentUser, onContactProvider }) {
   const isConsumerView = currentUser?.role === 'CONSUMER'
+
+  function formatLocation(musician) {
+    const locationParts = [musician.city, musician.state].filter((part) => typeof part === 'string' && part.trim())
+    const location = locationParts.join(', ')
+    const zipCode = typeof musician.zip_code === 'string' && musician.zip_code.trim() ? musician.zip_code.trim() : ''
+
+    if (location && zipCode) {
+      return `${location} · ${zipCode}`
+    }
+
+    return location || zipCode || 'Location not listed'
+  }
 
   return (
     <section className="content-grid section-anchor musicians-section route-page">
@@ -9,11 +21,6 @@ export default function MusiciansPage({ musicians, onEnroll, canEnroll, currentU
             <p className="eyebrow">Musicians</p>
             <h2>{isConsumerView ? 'Browse local service providers' : 'Browse local performers'}</h2>
           </div>
-          {canEnroll ? (
-            <button className="button secondary slim-button" type="button" onClick={onEnroll}>
-              Enroll a new musician
-            </button>
-          ) : null}
         </div>
 
         {currentUser ? <p className="role-chip role-chip-inline">Visible to {currentUser.role}</p> : null}
@@ -25,9 +32,7 @@ export default function MusiciansPage({ musicians, onEnroll, canEnroll, currentU
                 <h3>{musician.full_name}</h3>
                 <p>{musician.instrument}</p>
               </div>
-              <p>
-                {musician.city}, {musician.state}
-              </p>
+              <p>{formatLocation(musician)}</p>
               <div className="card-meta musician-contact">
                 <span>{musician.phone}</span>
                 <span>{musician.email}</span>
