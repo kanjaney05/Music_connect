@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 
 import {
@@ -77,10 +77,6 @@ function buildServiceProfileForm(profile) {
 }
 
 function getDefaultRoute(role) {
-  if (role) {
-    return '/my-profile'
-  }
-
   return '/'
 }
 
@@ -186,6 +182,7 @@ function AppShell() {
   const [isAuthenticating, setIsAuthenticating] = useState(true)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false)
   const [pendingContactProvider, setPendingContactProvider] = useState(null)
+  const serviceProfileDraftDirtyRef = useRef(false)
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -294,25 +291,38 @@ function AppShell() {
     }
   }
 
-  function setActiveServiceProfile(profile) {
+  function setActiveServiceProfile(profile, options = {}) {
+    const { resetDraft = true } = options
+
     if (!profile) {
       setSelectedServiceProfileId('')
       setServiceProfile(null)
-      setServiceProfileForm(emptyServiceProfileForm)
       setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
       localStorage.removeItem(SELECTED_PROFILE_STORAGE_KEY)
+      if (resetDraft) {
+        setServiceProfileForm(emptyServiceProfileForm)
+        serviceProfileDraftDirtyRef.current = false
+      } else {
+        serviceProfileDraftDirtyRef.current = true
+      }
       return
     }
 
     setSelectedServiceProfileId(String(profile.id))
     setServiceProfile(profile)
     setServiceProfileForm(buildServiceProfileForm(profile))
+    serviceProfileDraftDirtyRef.current = false
     localStorage.setItem(SELECTED_PROFILE_STORAGE_KEY, String(profile.id))
+  }
+
+  function updateServiceProfileForm(nextValue) {
+    serviceProfileDraftDirtyRef.current = true
+    setServiceProfileForm(nextValue)
   }
 
   async function handleSelectServiceProfile(nextProfileId) {
     if (!nextProfileId) {
-      setActiveServiceProfile(null)
+      setActiveServiceProfile(null, { resetDraft: false })
       setProfileMessage('Create a new profile below to add another account.')
       return
     }
@@ -544,7 +554,7 @@ function AppShell() {
 
         const profileResponse = responses[1]
         const supportIssuesResponse = responses[2]
-  const publicServiceProvidersResponse = responses[3]
+        const publicServiceProvidersResponse = responses[3]
         let loadedProfiles = []
 
         if (profileResponse.ok) {
@@ -552,18 +562,25 @@ function AppShell() {
           setServiceProfiles(loadedProfiles)
 
           const storedProfileId = localStorage.getItem(SELECTED_PROFILE_STORAGE_KEY)
-          const selectedProfile =
-            loadedProfiles.find((profile) => String(profile.id) === String(storedProfileId)) || loadedProfiles[0] || null
+          const selectedProfileFromStorage =
+            loadedProfiles.find((profile) => String(profile.id) === String(storedProfileId)) || null
+          const shouldPreserveDraft = serviceProfileDraftDirtyRef.current && !selectedProfileFromStorage
+          const selectedProfile = selectedProfileFromStorage || loadedProfiles[0] || null
 
-          setActiveServiceProfile(selectedProfile)
-          if (selectedProfile) {
+          if (selectedProfile && (!shouldPreserveDraft || selectedProfileFromStorage)) {
+            setActiveServiceProfile(selectedProfile)
             setProfileMessage('')
-          } else {
+          } else if (!shouldPreserveDraft) {
+            setActiveServiceProfile(null)
             setProfileMessage('No profile exists yet. Create a new profile to get started.')
+          } else {
+            setProfileMessage('')
           }
         } else if (profileResponse.status === 404) {
           setServiceProfiles([])
-          setActiveServiceProfile(null)
+          if (!serviceProfileDraftDirtyRef.current) {
+            setActiveServiceProfile(null)
+          }
           setProviderAvailabilityCalendar(emptyAvailabilityCalendar)
           setProfileMessage('No profile exists yet. Create a new profile to get started.')
         } else {
@@ -1127,6 +1144,7 @@ function AppShell() {
       }
       setProfileMessage(isUpdatingProfile ? 'Your service provider profile was saved.' : 'Your service provider profile was created.')
       setProfileMessage(isUpdatingProfile ? 'Your profile was saved.' : 'Your profile was created.')
+      serviceProfileDraftDirtyRef.current = false
     } catch {
       setProfileMessage('Unable to contact the server. Check that the backend is running and try again.')
     } finally {
@@ -1397,7 +1415,7 @@ function AppShell() {
                   <RouteGuard currentUser={currentUser} allowedRoles={["CONSUMER", "SERV-PROVIDER", "ADMIN"]} redirectTo={getDefaultRoute(currentUser?.role)}>
                     <ManageServiceProfilePage
                       profileForm={serviceProfileForm}
-                      setProfileForm={setServiceProfileForm}
+                      setProfileForm={updateServiceProfileForm}
                       onSubmit={handleServiceProfileSubmit}
                       currentUser={currentUser}
                       isSaving={isSavingProfile}
@@ -1412,7 +1430,7 @@ function AppShell() {
                       selectedServiceProfileId={selectedServiceProfileId}
                       onSelectServiceProfile={handleSelectServiceProfile}
                       onCreateNewProfile={() => {
-                        setActiveServiceProfile(null)
+                        setActiveServiceProfile(null, { resetDraft: false })
                         setProfileMessage('Create a new profile below to add another account.')
                       }}
                       onDeleteServiceProfile={handleDeleteServiceProfile}
