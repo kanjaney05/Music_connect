@@ -74,9 +74,22 @@ class PerformanceRequest(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     event_type: Mapped[str] = mapped_column(String(120), nullable=False)
     other_event: Mapped[str] = mapped_column(String(120), nullable=False, default="")
-    musician_id: Mapped[int] = mapped_column(ForeignKey("service_profiles.id"), nullable=False)
+    requester_email: Mapped[str] = mapped_column(String(180), nullable=False, default="", index=True)
+    musician_id: Mapped[Optional[int]] = mapped_column(ForeignKey("service_profiles.id"), nullable=True)
+    preferred_instrument: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     event_datetime: Mapped[str] = mapped_column(String(40), nullable=False)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ServiceProviderRating(Base):
+    __tablename__ = "service_provider_ratings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    provider_id: Mapped[int] = mapped_column(ForeignKey("service_profiles.id"), nullable=False, index=True)
+    rater_email: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 

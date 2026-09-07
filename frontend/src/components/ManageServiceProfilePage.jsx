@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 
+import { instrumentOptions } from './instruments'
+
 export default function ManageServiceProfilePage({
   profileForm,
   setProfileForm,
@@ -175,14 +177,34 @@ export default function ManageServiceProfilePage({
             </label>
             <label>
               Instrument
-              <input
+              <select
                 value={profileForm.instrument}
                 onChange={(event) => setProfileForm({ ...profileForm, instrument: event.target.value })}
-                placeholder="Piano, cello, saxophone..."
+                required
+              >
+                {profileForm.instrument && !instrumentOptions.includes(profileForm.instrument) ? (
+                  <option value={profileForm.instrument}>{profileForm.instrument}</option>
+                ) : null}
+                {instrumentOptions.map((instrument) => (
+                  <option key={instrument} value={instrument}>
+                    {instrument}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {profileForm.instrument === 'Other' ? (
+            <label>
+              Instrument name
+              <input
+                value={profileForm.other_instrument}
+                onChange={(event) => setProfileForm({ ...profileForm, other_instrument: event.target.value })}
+                placeholder="Enter the instrument name"
                 required
               />
             </label>
-          </div>
+          ) : null}
 
           <div className="field-grid">
             <label>

@@ -10,6 +10,7 @@ import {
   MusiciansPage,
   RequestPerformancePage,
 } from './components'
+import { instrumentOptions } from './components/instruments'
 
 const ADMIN_EMAIL = 'kanjaney05@gmail.com'
 const AUTH_STORAGE_KEY = 'music-connect-auth-user'
@@ -19,6 +20,8 @@ const emptyRequestForm = {
   event_type: 'Community celebration',
   other_event: '',
   musician_id: '',
+  preferred_instrument: '',
+  preferred_other_instrument: '',
   event_datetime: '',
   notes: '',
 }
@@ -31,6 +34,7 @@ const emptySupportIssueForm = {
 const emptyServiceProfileForm = {
   full_name: '',
   instrument: 'Piano',
+  other_instrument: '',
   zip_code: '',
   city: '',
   state: '',
@@ -62,7 +66,8 @@ function buildServiceProfileForm(profile) {
 
   return {
     full_name: profile.full_name,
-    instrument: profile.instrument,
+    instrument: instrumentOptions.includes(profile.instrument) ? profile.instrument : 'Other',
+    other_instrument: instrumentOptions.includes(profile.instrument) ? '' : profile.instrument,
     zip_code: profile.zip_code || '',
     city: profile.city,
     state: profile.state,
@@ -513,7 +518,7 @@ function AppShell() {
       const isServiceProviderRole = currentUser.role === 'SERV-PROVIDER'
       const isAdminRole = currentUser.role === 'ADMIN'
       const canManageAvailability = isServiceProviderRole || isAdminRole
-      const shouldLoadRequesterData = currentUser.role === 'CONSUMER' || isAdminRole
+      const shouldLoadRequesterData = currentUser.role === 'CONSUMER' || isAdminRole || isServiceProviderRole
       const supportIssuesEndpoint = isAdminRole ? '/api/support-issues' : '/api/support-issues/me'
 
       try {
@@ -846,12 +851,6 @@ function AppShell() {
     }
   }, [currentUser])
 
-  useEffect(() => {
-    if (!requestForm.musician_id && musicians.length > 0) {
-      setRequestForm((current) => ({ ...current, musician_id: String(musicians[0].id) }))
-    }
-  }, [musicians, requestForm.musician_id])
-
   const selectedMusician = useMemo(() => {
     return musicians.find((musician) => String(musician.id) === String(requestForm.musician_id))
   }, [musicians, requestForm.musician_id])
@@ -889,6 +888,34 @@ function AppShell() {
     }
 
     window.location.href = buildProviderContactLink(provider)
+  }
+
+  async function handleSubmitProviderRating(providerId, rating, ratingMessage) {
+    try {
+      const response = await fetch(`/api/service-providers/${providerId}/ratings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+        },
+        body: JSON.stringify({ rating, message: ratingMessage }),
+      })
+      const payload = await response.json().catch(() => null)
+
+      if (!response.ok) {
+        return { ok: false, message: formatAuthError(payload?.detail, 'Could not save your rating.') }
+      }
+
+      const providersResponse = await fetch('/api/public/service-providers')
+      if (providersResponse.ok) {
+        const providers = await providersResponse.json()
+        setPublicServiceProviders(providers)
+        setMusicians(providers)
+      }
+      return { ok: true, message: 'Your rating was posted.' }
+    } catch {
+      return { ok: false, message: 'Unable to contact the server. Please try again.' }
+    }
   }
 
   async function handleSupportIssueSubmit(event) {
@@ -1055,7 +1082,7 @@ function AppShell() {
     event.preventDefault()
     setMessage('')
 
-    const hasPublishedAvailability = Array.isArray(customerAvailabilityCalendar.days)
+    const hasPublishedAvailability = requestForm.musician_id && Array.isArray(customerAvailabilityCalendar.days)
       ? customerAvailabilityCalendar.days.some((day) => Array.isArray(day.slots) && day.slots.length > 0)
       : false
 
@@ -1066,8 +1093,18 @@ function AppShell() {
 
     const payload = {
       ...requestForm,
-      musician_id: Number(requestForm.musician_id),
+      preferred_instrument:
+        requestForm.preferred_instrument === 'Other'
+          ? requestForm.preferred_other_instrument.trim()
+          : requestForm.preferred_instrument,
+      musician_id: requestForm.musician_id ? Number(requestForm.musician_id) : null,
     }
+
+    if (requestForm.preferred_instrument === 'Other' && !payload.preferred_instrument) {
+      setMessage('Please enter the preferred instrument name.')
+      return
+    }
+    delete payload.preferred_other_instrument
 
     if (payload.event_type === 'Other event' && !payload.other_event.trim()) {
       setMessage('Please describe the other event type before submitting.')
@@ -1093,7 +1130,6 @@ function AppShell() {
     setPerformanceRequests((current) => [createdRequest, ...current])
     setRequestForm((current) => ({
       ...emptyRequestForm,
-      musician_id: current.musician_id,
     }))
 
     const providerId = Number(payload.musician_id)
@@ -1117,13 +1153,26 @@ function AppShell() {
 
     try {
       const isUpdatingProfile = Boolean(selectedServiceProfileId)
+      const profilePayload = {
+        ...serviceProfileForm,
+        instrument:
+          serviceProfileForm.instrument === 'Other'
+            ? serviceProfileForm.other_instrument.trim()
+            : serviceProfileForm.instrument,
+      }
+      delete profilePayload.other_instrument
+
+      if (!profilePayload.instrument) {
+        setProfileMessage('Please enter the instrument name.')
+        return
+      }
       const response = await fetch(isUpdatingProfile ? `/api/service-profiles/me/${selectedServiceProfileId}` : '/api/service-profiles/me', {
         method: isUpdatingProfile ? 'PUT' : 'POST',
         headers: {
           'Content-Type': 'application/json',
           ...getAuthHeaders(),
         },
-        body: JSON.stringify(serviceProfileForm),
+        body: JSON.stringify(profilePayload),
       })
 
       const payload = await response.json().catch(() => null)
@@ -1372,7 +1421,7 @@ function AppShell() {
                   Local musicians
                 </NavLink>
                 <NavLink className={({ isActive }) => (isActive ? 'nav-link nav-link-accent active' : 'nav-link nav-link-accent')} to="/request-performance">
-                  Request a performance
+                  {isServiceProvider ? 'Performance Requests' : 'Request a performance'}
                 </NavLink>
                 <button className="button secondary slim-button nav-button" type="button" onClick={handleLogout}>
                   Sign out
@@ -1396,6 +1445,8 @@ function AppShell() {
                     canRequest={showConsumerRequest}
                     onContactProvider={handleContactProvider}
                     publicServiceProviders={publicServiceProviders}
+                    performanceRequests={performanceRequests}
+                    serviceProfiles={serviceProfiles}
                   />
                 }
               />
@@ -1406,6 +1457,7 @@ function AppShell() {
                     musicians={musicians}
                     currentUser={currentUser}
                     onContactProvider={handleContactProvider}
+                    onSubmitRating={handleSubmitProviderRating}
                   />
                 }
               />
@@ -1480,6 +1532,7 @@ function AppShell() {
                       eventTypes={eventTypes}
                       musicians={musicians}
                       performanceRequests={performanceRequests}
+                      currentUser={currentUser}
                       selectedMusician={selectedMusician}
                       availabilityCalendar={customerAvailabilityCalendar}
                       availabilityMessage={availabilityMessage}

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { instrumentOptions } from './instruments'
+
 export default function RequestPerformancePage({
   requestForm,
   setRequestForm,
@@ -11,8 +13,10 @@ export default function RequestPerformancePage({
   availabilityMessage,
   isLoadingAvailability,
   onSubmit,
+  currentUser,
 }) {
   const [selectedDate, setSelectedDate] = useState('')
+  const isProviderView = currentUser?.role === 'SERV-PROVIDER'
 
   const calendarDays = availabilityCalendar?.days || []
 
@@ -50,10 +54,10 @@ export default function RequestPerformancePage({
       <article className="card form-card request-card full-span-card">
         <div className="section-head">
           <p className="eyebrow">Performance request</p>
-          <h2>Request a musician for an event</h2>
+          <h2>{isProviderView ? 'Consumer performance requests' : 'Request a musician for an event'}</h2>
         </div>
 
-        <form className="stack-form" onSubmit={onSubmit}>
+        {!isProviderView ? <form className="stack-form" onSubmit={onSubmit}>
           <div className="field-grid">
             <label>
               Event type
@@ -71,7 +75,7 @@ export default function RequestPerformancePage({
             </label>
 
             <label>
-              Available musician
+              Preferred musician (optional)
               <select
                 value={requestForm.musician_id}
                 onChange={(event) =>
@@ -81,12 +85,8 @@ export default function RequestPerformancePage({
                     event_datetime: '',
                   })
                 }
-                required
-                disabled={musicians.length === 0}
               >
-                <option value="" disabled>
-                  {musicians.length === 0 ? 'No musicians enrolled yet' : 'Select a musician'}
-                </option>
+                <option value="">No preference</option>
                 {musicians.map((musician) => (
                   <option key={musician.id} value={musician.id}>
                     {musician.full_name} - {musician.instrument} ({musician.city}, {musician.state}
@@ -95,7 +95,36 @@ export default function RequestPerformancePage({
                 ))}
               </select>
             </label>
+            <label>
+              Preferred instrument
+              <select
+                value={requestForm.preferred_instrument}
+                onChange={(event) => setRequestForm({ ...requestForm, preferred_instrument: event.target.value })}
+              >
+                <option value="">No preference</option>
+                {requestForm.preferred_instrument && !instrumentOptions.includes(requestForm.preferred_instrument) ? (
+                  <option value={requestForm.preferred_instrument}>{requestForm.preferred_instrument}</option>
+                ) : null}
+                {instrumentOptions.map((instrument) => (
+                  <option key={instrument} value={instrument}>
+                    {instrument}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
+
+          {requestForm.preferred_instrument === 'Other' ? (
+            <label>
+              Preferred instrument name
+              <input
+                value={requestForm.preferred_other_instrument}
+                onChange={(event) => setRequestForm({ ...requestForm, preferred_other_instrument: event.target.value })}
+                placeholder="Enter the instrument name"
+                required
+              />
+            </label>
+          ) : null}
 
           {requestForm.event_type === 'Other event' ? (
             <label>
@@ -183,10 +212,10 @@ export default function RequestPerformancePage({
             </div>
           </div>
 
-          <button className="button primary" type="submit" disabled={musicians.length === 0}>
+          <button className="button primary" type="submit">
             Submit request
           </button>
-        </form>
+        </form> : <p className="hero-text">Review consumer requests below for upcoming performance opportunities.</p>}
 
         {selectedMusician ? (
           <div className="spotlight request-spotlight">
@@ -222,7 +251,8 @@ export default function RequestPerformancePage({
                   <h3>{eventLabel}</h3>
                   <span className="status-pill">Requested</span>
                 </div>
-                <p>{musicianLabel ? musicianLabel.full_name : `Musician #${performanceRequest.musician_id}`}</p>
+                <p>{musicianLabel?.full_name || performanceRequest.provider_name || 'Open musician request'}</p>
+                {performanceRequest.preferred_instrument ? <p>Preferred instrument: {performanceRequest.preferred_instrument}</p> : null}
                 <p className="event-date">{performanceRequest.event_datetime}</p>
                 {performanceRequest.notes ? <p>{performanceRequest.notes}</p> : null}
               </article>

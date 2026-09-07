@@ -93,6 +93,23 @@ class ServiceProfileRead(ServiceProfileBase):
     preferred_contact_method: str
     available_weekends: bool
     travel_buffer_minutes: int
+    average_rating: float = 0
+    rating_count: int = 0
+
+
+class ServiceProviderRatingCreate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    message: str = Field(min_length=1, max_length=1000)
+
+
+class ServiceProviderRatingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    provider_id: int
+    rating: int
+    message: str
+    created_at: datetime
 
 
 class SupportIssueBase(BaseModel):
@@ -186,7 +203,8 @@ class CommunityEventRead(CommunityEventBase):
 class PerformanceRequestBase(BaseModel):
     event_type: str = Field(min_length=2, max_length=120)
     other_event: str = Field(default="", max_length=120)
-    musician_id: int
+    musician_id: Optional[int] = None
+    preferred_instrument: str = Field(default="", max_length=80)
     event_datetime: str = Field(min_length=5, max_length=40)
     notes: str = Field(default="", max_length=1000)
 
@@ -199,6 +217,10 @@ class PerformanceRequestRead(PerformanceRequestBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    provider_name: str = ""
+    provider_instrument: str = ""
+    provider_available: bool = False
+    provider_willing: bool = False
 
 
 class DashboardResponse(BaseModel):

@@ -17,7 +17,7 @@ from sqlalchemy import delete, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
-from .models import AvailabilitySlot, CommunityEvent, PerformanceRequest, ServiceProfile, SupportIssue, User
+from .models import AvailabilitySlot, CommunityEvent, PerformanceRequest, ServiceProfile, ServiceProviderRating, SupportIssue, User
 from .schemas import (
     AvailabilityCalendarRead,
     AvailabilityDayRead,
@@ -37,6 +37,8 @@ from .schemas import (
     PerformanceRequestRead,
     ServiceProfileCreate,
     ServiceProfileRead,
+    ServiceProviderRatingCreate,
+    ServiceProviderRatingRead,
     ServiceProfileUpsert,
     SupportIssueCreate,
     SupportIssueRead,
@@ -96,6 +98,8 @@ def startup_event() -> None:
     ensure_user_columns()
     ensure_service_profile_columns()
     ensure_availability_slot_columns()
+    ensure_performance_request_columns()
+    ensure_optional_performance_request_provider()
     with Session(engine) as session:
         ensure_admin_user(session)
         backfill_service_profiles(session)
@@ -163,9 +167,11 @@ def startup_event() -> None:
         if request_count == 0:
             session.add(
                 PerformanceRequest(
+                    requester_email="",
                     event_type="Community celebration",
                     other_event="",
                     musician_id=1,
+                    preferred_instrument="Piano",
                     event_datetime="2026-08-30T18:00",
                     notes="Please bring a light acoustic set for the opening hour.",
                 )
@@ -255,6 +261,61 @@ def ensure_availability_slot_columns() -> None:
             connection.execute(text("ALTER TABLE availability_slots ADD COLUMN reserved_by_request_id INTEGER"))
         if "reserved_at" not in existing_columns:
             connection.execute(text("ALTER TABLE availability_slots ADD COLUMN reserved_at DATETIME"))
+
+
+def ensure_performance_request_columns() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("performance_requests"):
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("performance_requests")}
+    with engine.begin() as connection:
+        if "requester_email" not in existing_columns:
+            connection.execute(text("ALTER TABLE performance_requests ADD COLUMN requester_email VARCHAR(180) NOT NULL DEFAULT ''"))
+        if "preferred_instrument" not in existing_columns:
+            connection.execute(text("ALTER TABLE performance_requests ADD COLUMN preferred_instrument VARCHAR(80) NOT NULL DEFAULT ''"))
+
+
+def ensure_optional_performance_request_provider() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("performance_requests"):
+        return
+
+    musician_column = next(column for column in inspector.get_columns("performance_requests") if column["name"] == "musician_id")
+    if musician_column["nullable"]:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("PRAGMA foreign_keys=OFF"))
+        connection.execute(text("ALTER TABLE performance_requests RENAME TO performance_requests_old"))
+        connection.execute(
+            text(
+                "CREATE TABLE performance_requests ("
+                "id INTEGER NOT NULL PRIMARY KEY, "
+                "event_type VARCHAR(120) NOT NULL, "
+                "other_event VARCHAR(120) NOT NULL DEFAULT '', "
+                "requester_email VARCHAR(180) NOT NULL DEFAULT '', "
+                "musician_id INTEGER, "
+                "preferred_instrument VARCHAR(80) NOT NULL DEFAULT '', "
+                "event_datetime VARCHAR(40) NOT NULL, "
+                "notes TEXT NOT NULL DEFAULT '', "
+                "created_at DATETIME NOT NULL, "
+                "FOREIGN KEY(musician_id) REFERENCES service_profiles (id)"
+                ")"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO performance_requests "
+                "(id, event_type, other_event, requester_email, musician_id, preferred_instrument, event_datetime, notes, created_at) "
+                "SELECT id, event_type, other_event, requester_email, musician_id, preferred_instrument, event_datetime, notes, created_at "
+                "FROM performance_requests_old"
+            )
+        )
+        connection.execute(text("DROP TABLE performance_requests_old"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_performance_requests_id ON performance_requests (id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_performance_requests_requester_email ON performance_requests (requester_email)"))
+        connection.execute(text("PRAGMA foreign_keys=ON"))
 
 
 def backfill_service_profiles(session: Session) -> None:
@@ -1139,9 +1200,77 @@ def list_events(
 
 
 @app.get("/api/public/service-providers", response_model=list[ServiceProfileRead])
-def public_service_providers(db: Session = Depends(get_db)) -> list[ServiceProfile]:
+def public_service_providers(db: Session = Depends(get_db)) -> list[dict]:
     statement = select(ServiceProfile).order_by(ServiceProfile.created_at.desc())
+    return [serialize_service_profile_with_rating(db, profile) for profile in db.scalars(statement)]
+
+
+def serialize_service_profile_with_rating(db: Session, profile: ServiceProfile) -> dict:
+    rating_summary = db.execute(
+        select(func.avg(ServiceProviderRating.rating), func.count(ServiceProviderRating.id))
+        .where(ServiceProviderRating.provider_id == profile.id)
+    ).one()
+    return {
+        **{column.name: getattr(profile, column.name) for column in ServiceProfile.__table__.columns},
+        "average_rating": round(float(rating_summary[0] or 0), 1),
+        "rating_count": int(rating_summary[1] or 0),
+    }
+
+
+@app.get("/api/service-providers/{provider_id}/ratings", response_model=list[ServiceProviderRatingRead])
+def list_provider_ratings(
+    provider_id: int,
+    db: Session = Depends(get_db),
+) -> list[ServiceProviderRating]:
+    if db.get(ServiceProfile, provider_id) is None:
+        raise HTTPException(status_code=404, detail="Service provider not found")
+
+    statement = (
+        select(ServiceProviderRating)
+        .where(ServiceProviderRating.provider_id == provider_id)
+        .order_by(ServiceProviderRating.created_at.desc(), ServiceProviderRating.id.desc())
+    )
     return list(db.scalars(statement))
+
+
+@app.post("/api/service-providers/{provider_id}/ratings", response_model=ServiceProviderRatingRead, status_code=201)
+def create_provider_rating(
+    provider_id: int,
+    payload: ServiceProviderRatingCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ServiceProviderRating:
+    if db.get(ServiceProfile, provider_id) is None:
+        raise HTTPException(status_code=404, detail="Service provider not found")
+
+    rater_email = normalize_email(user.email)
+    completed_service = db.scalar(
+        select(func.count())
+        .select_from(PerformanceRequest)
+        .where(PerformanceRequest.musician_id == provider_id)
+        .where(PerformanceRequest.requester_email == rater_email)
+    ) or 0
+    if completed_service == 0:
+        raise HTTPException(status_code=403, detail="You can rate this provider after requesting and receiving their service.")
+
+    existing_rating = db.scalar(
+        select(ServiceProviderRating)
+        .where(ServiceProviderRating.provider_id == provider_id)
+        .where(ServiceProviderRating.rater_email == rater_email)
+    )
+    if existing_rating is not None:
+        raise HTTPException(status_code=409, detail="You have already rated this service provider.")
+
+    provider_rating = ServiceProviderRating(
+        provider_id=provider_id,
+        rater_email=rater_email,
+        rating=payload.rating,
+        message=payload.message.strip(),
+    )
+    db.add(provider_rating)
+    db.commit()
+    db.refresh(provider_rating)
+    return provider_rating
 
 
 @app.get("/api/public/event-requests", response_model=list[CommunityEventRead])
@@ -1169,7 +1298,66 @@ def list_performance_requests(
     user: User = Depends(get_current_user),
 ) -> list[PerformanceRequest]:
     statement = select(PerformanceRequest).order_by(PerformanceRequest.created_at.desc())
-    return list(db.scalars(statement))
+    if user.role == "CONSUMER":
+        statement = statement.where(PerformanceRequest.requester_email == normalize_email(user.email))
+    elif user.role == "SERV-PROVIDER":
+        statement = statement.where(PerformanceRequest.requester_email != "")
+
+    requests = list(db.scalars(statement))
+    return [serialize_performance_request(db, performance_request) for performance_request in requests]
+
+
+def serialize_performance_request(db: Session, performance_request: PerformanceRequest) -> dict:
+    selected_provider = db.get(ServiceProfile, performance_request.musician_id) if performance_request.musician_id else None
+    providers = [selected_provider] if selected_provider else list(db.scalars(select(ServiceProfile).order_by(ServiceProfile.created_at.desc())))
+    provider_available = False
+    provider_willing = False
+    matched_provider = None
+
+    for provider in providers:
+        if provider is None:
+            continue
+        event_matches = provider.preferred_event_type in {"", "Any event", performance_request.event_type}
+        instrument_matches = not performance_request.preferred_instrument or performance_request.preferred_instrument.lower() in provider.instrument.lower()
+        if not event_matches or not instrument_matches:
+            continue
+
+        provider_willing = True
+        slot_count = db.scalar(
+            select(func.count()).select_from(AvailabilitySlot).where(AvailabilitySlot.service_profile_id == provider.id)
+        ) or 0
+        if slot_count == 0:
+            provider_available = True
+        else:
+            try:
+                requested_start = normalize_slot_datetime(datetime.fromisoformat(performance_request.event_datetime))
+                provider_available = (db.scalar(
+                    select(func.count())
+                    .select_from(AvailabilitySlot)
+                    .where(AvailabilitySlot.service_profile_id == provider.id)
+                    .where(AvailabilitySlot.starts_at == requested_start)
+                    .where(AvailabilitySlot.is_reserved.is_(False))
+                ) or 0) > 0
+            except ValueError:
+                provider_available = False
+
+        if provider_available:
+            matched_provider = provider
+            break
+
+    return {
+        "id": performance_request.id,
+        "event_type": performance_request.event_type,
+        "other_event": performance_request.other_event,
+        "musician_id": performance_request.musician_id,
+        "preferred_instrument": performance_request.preferred_instrument,
+        "event_datetime": performance_request.event_datetime,
+        "notes": performance_request.notes,
+        "provider_name": matched_provider.full_name if matched_provider else "",
+        "provider_instrument": matched_provider.instrument if matched_provider else "",
+        "provider_available": provider_available,
+        "provider_willing": provider_willing,
+    }
 
 
 @app.post("/api/performance-requests", response_model=PerformanceRequestRead, status_code=201)
@@ -1178,8 +1366,8 @@ def create_performance_request(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles("CONSUMER")),
 ) -> PerformanceRequest:
-    musician = db.get(ServiceProfile, payload.musician_id)
-    if musician is None:
+    musician = db.get(ServiceProfile, payload.musician_id) if payload.musician_id else None
+    if payload.musician_id and musician is None:
         raise HTTPException(status_code=404, detail="Musician not found")
 
     try:
@@ -1187,11 +1375,11 @@ def create_performance_request(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Event date and time must be in ISO format") from exc
 
-    slot_count = db.scalar(
+    slot_count = (db.scalar(
         select(func.count())
         .select_from(AvailabilitySlot)
         .where(AvailabilitySlot.service_profile_id == musician.id)
-    ) or 0
+    ) or 0) if musician else 0
     selected_slot: Optional[AvailabilitySlot] = None
     if slot_count > 0:
         selected_slot = db.scalar(
@@ -1204,7 +1392,10 @@ def create_performance_request(
         if selected_slot.is_reserved:
             raise HTTPException(status_code=409, detail="This slot was just booked. Please choose another time slot.")
 
-    performance_request = PerformanceRequest(**payload.model_dump())
+    performance_request = PerformanceRequest(
+        **payload.model_dump(),
+        requester_email=normalize_email(user.email),
+    )
     db.add(performance_request)
     db.flush()
 
@@ -1215,7 +1406,7 @@ def create_performance_request(
 
     db.commit()
     db.refresh(performance_request)
-    return performance_request
+    return serialize_performance_request(db, performance_request)
 
 
 @app.get("/api/service-providers/{provider_id}/availability-calendar", response_model=AvailabilityCalendarRead)
